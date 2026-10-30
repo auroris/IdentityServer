@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <AssemblyName>IdentityServer</AssemblyName>
+    <RootNamespace>IdentityServer</RootNamespace>
+    <!-- Keep sibling projects out of the root web project's source and content globs. -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);ActiveDirectory\**;IdentityServer.Core\**;tests\**;artifacts\**</DefaultItemExcludes>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="IdentityServer.Core\IdentityServer.Core.csproj" />
+    <Content Update="appsettings.Local.json" CopyToPublishDirectory="Never" />
+  </ItemGroup>
+</Project>

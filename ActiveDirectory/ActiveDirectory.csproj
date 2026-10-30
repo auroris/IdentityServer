@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The one copy of the Active Directory wrapper library. The identity server references it from
+    here; other applications can add a ProjectReference to this
+    file instead of keeping their own copy.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <AssemblyName>ActiveDirectory</AssemblyName>
+    <RootNamespace>ActiveDirectory</RootNamespace>
+    <!-- System.DirectoryServices only works on Windows. Like the identity server, the library
+         silences the platform-compatibility analyzer instead of annotating every member, so
+         consumers do not inherit Windows-only warnings at each call site. -->
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.DirectoryServices" Version="10.0.14" />
+  </ItemGroup>
+
+</Project>
