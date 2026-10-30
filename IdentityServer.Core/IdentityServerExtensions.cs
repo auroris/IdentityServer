@@ -25,13 +25,6 @@ public static class IdentityServerExtensions
         services.AddSingleton(hostingOptions);
         if (hostingOptions.HasProxyConfiguration)
             services.Configure<Microsoft.AspNetCore.Builder.ForwardedHeadersOptions>(hostingOptions.Configure);
-        services.TryAddSingleton<IUserProfileProvider>(_ =>
-        {
-            if (identityOptions.Provider != DirectoryProvider.Windows)
-                return new LdapUserProfileProvider(identityOptions);
-            if (OperatingSystem.IsWindows()) return new WindowsUserProfileProvider();
-            throw new PlatformNotSupportedException("The Windows directory provider requires Windows.");
-        });
         // Negotiate proves who the user is; OpenIddict turns that identity into tokens
         // applications can use. The fallback policy also protects newly added application routes
         // unless they explicitly opt into anonymous access.

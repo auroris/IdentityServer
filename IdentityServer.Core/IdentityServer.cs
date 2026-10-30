@@ -2,6 +2,7 @@ using Microsoft.AspNetCore;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.IdentityModel.Tokens;
@@ -79,6 +80,16 @@ namespace IdentityServer
         /// <param name="configuration">The consuming application's configuration.</param>
         public static void Add(IServiceCollection services, IConfiguration configuration)
         {
+            // The authorization handler below resolves these, so a host calling Add without AddIdentityServer needs them too.
+            services.TryAddSingleton(_ => IdentityProviderOptions.Read(configuration));
+            services.TryAddSingleton<IUserProfileProvider>(provider =>
+            {
+                var identityOptions = provider.GetRequiredService<IdentityProviderOptions>();
+                if (identityOptions.Provider != DirectoryProvider.Windows)
+                    return new LdapUserProfileProvider(identityOptions);
+                if (OperatingSystem.IsWindows()) return new WindowsUserProfileProvider();
+                throw new PlatformNotSupportedException("The Windows directory provider requires Windows.");
+            });
             // Each host owns its configuration and cached group patterns. There is no process-global
             // Program state shared between independently configured servers.
             var validGroupPatterns = new Lazy<Regex[]>(() =>
