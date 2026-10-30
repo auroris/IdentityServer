@@ -1,0 +1,28 @@
+[Unit]
+Description=IdentityServer OpenID Connect service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=identityserver
+Group=identityserver
+WorkingDirectory=/opt/identityserver
+ExecStart=/usr/bin/dotnet /opt/identityserver/IdentityServer.dll
+Environment=ASPNETCORE_URLS=http://127.0.0.1:5080
+Environment=ASPNETCORE_ENVIRONMENT=Production
+EnvironmentFile=/etc/identityserver/identityserver.env
+Restart=on-failure
+RestartSec=10
+KillSignal=SIGTERM
+TimeoutStopSec=90
+StateDirectory=identityserver
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/identityserver/logs
+
+[Install]
+WantedBy=multi-user.target

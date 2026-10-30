@@ -5,7 +5,7 @@ using Microsoft.Extensions.Configuration;
 
 namespace IdentityServer;
 
-internal enum BrowserAuthenticationMode { Auto, Negotiate, Kerberos }
+internal enum BrowserAuthenticationMode { Auto, Negotiate, Kerberos, ProxyKerberos }
 internal enum DirectoryProvider { Auto, Windows, ActiveDirectory, SambaAd, FreeIpa }
 
 /// <summary>Resolved once per host. Invalid configuration never selects a weaker fallback.</summary>
@@ -22,11 +22,17 @@ internal sealed class IdentityProviderOptions
     public string? BindDn { get; private init; }
     public string? BindPassword { get; private init; }
     public int TimeoutSeconds { get; private init; }
+    internal string AuthenticationScheme => Authentication == BrowserAuthenticationMode.ProxyKerberos
+        ? ProxyKerberosOptions.Scheme : Microsoft.AspNetCore.Authentication.Negotiate.NegotiateDefaults.AuthenticationScheme;
 
     public bool Allows(ClaimsPrincipal? principal) =>
         principal?.Identity?.IsAuthenticated == true &&
-        (Authentication != BrowserAuthenticationMode.Kerberos ||
-         string.Equals(principal.Identity.AuthenticationType, "Kerberos", StringComparison.OrdinalIgnoreCase));
+        (Authentication switch
+        {
+            BrowserAuthenticationMode.Kerberos => string.Equals(principal.Identity.AuthenticationType, "Kerberos", StringComparison.OrdinalIgnoreCase),
+            BrowserAuthenticationMode.ProxyKerberos => principal.Identity.AuthenticationType == ProxyKerberosOptions.Scheme,
+            _ => true
+        });
 
     public static IdentityProviderOptions Read(IConfiguration configuration, bool? isWindows = null)
     {
@@ -40,11 +46,13 @@ internal sealed class IdentityProviderOptions
         if (authentication == BrowserAuthenticationMode.Auto)
             authentication = windows && provider != DirectoryProvider.FreeIpa ? BrowserAuthenticationMode.Negotiate : BrowserAuthenticationMode.Kerberos;
 
-        if (provider == DirectoryProvider.FreeIpa && authentication != BrowserAuthenticationMode.Kerberos)
-            throw new InvalidOperationException("FreeIPA requires IdentityServer:Authentication:Mode Kerberos (or Auto).");
+        if (provider == DirectoryProvider.FreeIpa && authentication is not (BrowserAuthenticationMode.Kerberos or BrowserAuthenticationMode.ProxyKerberos))
+            throw new InvalidOperationException("FreeIPA requires IdentityServer:Authentication:Mode Kerberos, ProxyKerberos or Auto.");
 
         if (provider == DirectoryProvider.Windows)
         {
+            if (authentication == BrowserAuthenticationMode.ProxyKerberos)
+                throw new InvalidOperationException("ProxyKerberos requires an explicit LDAP directory provider (ActiveDirectory, SambaAd or FreeIpa); forwarded principals have no Windows token/SID claims.");
             if (!windows)
                 throw new InvalidOperationException("The Windows directory provider requires Windows. Configure IdentityServer:Directory for ActiveDirectory, SambaAd or FreeIpa on Linux.");
             if (directory.GetChildren().Any(section => !section.Key.Equals("Provider", StringComparison.OrdinalIgnoreCase)))

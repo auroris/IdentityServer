@@ -17,6 +17,7 @@ Run it standalone or embed its core library in your own ASP.NET Core application
 - [Installation](#installation)
   - [Hosting with Kestrel](#hosting-with-kestrel)
   - [Hosting in IIS](#hosting-in-iis)
+  - [Hosting behind Apache or Nginx](#hosting-behind-apache-or-nginx)
   - [Checking a deployment](#checking-a-deployment)
   - [How authentication is wired](#how-authentication-is-wired)
 - [Configuration](#configuration)
@@ -163,6 +164,12 @@ For a **sub-application**, such as `https://apps.example.com/IdentityServer`, us
 
 With automatic issuer detection, discovery and endpoints include that application path. Configure the client's authority as `https://apps.example.com/IdentityServer`; discovery is then under `/IdentityServer/.well-known/openid-configuration`. A URL rewrite exposing the endpoints at the site root is unnecessary for a client using this authority. Setting `ServerUri` alone does not create a sub-application or change routing.
 
+### Hosting behind Apache or Nginx
+
+Use a separate Kestrel service behind the proxy, optionally under a path such as `/IdentityServer`. The [Apache and Nginx guide](docs/apache-and-nginx.md) includes proxy configurations, a systemd unit, application settings and tests. Apache uses mod_auth_gssapi; Nginx requires its SPNEGO authentication module.
+
+Select `Authentication:Mode: ProxyKerberos` for these examples: the front server verifies Kerberos and supplies a principal over an explicitly trusted, secret-protected connection. Set `PathBase` to the public prefix and configure `ReverseProxy:KnownProxies` with the actual backend peer addresses. Windows/IIS keeps its existing defaults when these settings are omitted.
+
 ### Checking a deployment
 
 | Check | What success tells you |
@@ -177,16 +184,16 @@ With automatic issuer detection, discovery and endpoints include that applicatio
 
 Protocol requests and application routes are handled at different points in the middleware pipeline:
 
-- **The authorization endpoint** (`/connect/authorize`) is processed by OpenIddict inside ASP.NET Core's authentication middleware. If there is no Windows identity yet, its handler issues a `401 Negotiate` **challenge**, asking the browser to authenticate and retry. A first 401 is part of the exchange, not proof of failure. The Windows exchange needs HTTP/1.1 even if the initial request used HTTP/2. Under IIS an identity may already be available, avoiding another challenge.
+- **The authorization endpoint** (`/connect/authorize`, under any configured application path) is processed by OpenIddict inside ASP.NET Core's authentication middleware. With native authentication, if there is no Windows/Kerberos identity yet, its handler issues a `401 Negotiate` **challenge**, asking the browser to authenticate and retry. A first 401 is part of the exchange, not proof of failure. The native exchange needs HTTP/1.1 even if the initial request used HTTP/2. Under IIS an identity may already be available, avoiding another challenge. With ProxyKerberos, Apache/Nginx performs that exchange and supplies a verified principal; a missing proxy identity produces 403 at the backend instead of starting another Negotiate exchange.
 - **Routed application endpoints** go through the `Authentication` middleware, which runs after ASP.NET Core's authentication and challenges unauthenticated requests unless the endpoint allows anonymous access. OpenIddict handles discovery and token requests before this middleware. Unknown paths, including `/favicon.ico`, return 404 without triggering a Windows sign-in prompt.
 
-Negotiate can retain authentication state on a connection. A proxy in front of Kestrel Negotiate must maintain one-to-one connection affinity; forwarded headers alone do not address this. See the [Kestrel Windows authentication guidance](https://learn.microsoft.com/en-us/aspnet/core/security/authentication/windowsauth?view=aspnetcore-10.0#kestrel).
+Negotiate can retain authentication state on a connection. A proxy forwarding native Negotiate to Kestrel must maintain one-to-one connection affinity; forwarded headers alone do not address this. The [Apache/Nginx templates](docs/apache-and-nginx.md) use ProxyKerberos instead, authenticating each backend request independently. See the [Kestrel Windows authentication guidance](https://learn.microsoft.com/en-us/aspnet/core/security/authentication/windowsauth?view=aspnetcore-10.0#kestrel).
 
 ## Configuration
 
 ### Authentication and directory providers
 
-`IdentityServer:Authentication:Mode` accepts `Auto` (default), `Negotiate`, or `Kerberos`. `IdentityServer:Directory:Provider` accepts `Auto` (default), `Windows`, `ActiveDirectory`, `SambaAd`, or `FreeIpa` (case-insensitive).
+`IdentityServer:Authentication:Mode` accepts `Auto` (default), `Negotiate`, `Kerberos`, or explicit `ProxyKerberos`. `IdentityServer:Directory:Provider` accepts `Auto` (default), `Windows`, `ActiveDirectory`, `SambaAd`, or `FreeIpa` (case-insensitive). ProxyKerberos is for an authenticating Apache/Nginx front server and requires the [proxy trust settings](docs/apache-and-nginx.md#application-configuration); Auto never enables header authentication.
 
 | Setup | Authentication selected by Auto | Directory lookup |
 |---|---|---|
@@ -312,7 +319,7 @@ Sets the **issuer**, the server identity clients expect in discovery and tokens.
 
 Defaults to `false`. A reverse proxy can receive `https://identity.example.com` and forward it internally as HTTP to a different address. **Forwarded headers** describe the original request: `X-Forwarded-Proto` carries the scheme (`http`/`https`), and `X-Forwarded-Host` carries the hostname. The middleware can use them so issuer and endpoint generation see the public address.
 
-Set this switch to `true` when your hosting arrangement needs that middleware, and configure accepted headers and trusted proxy addresses in the host's `ForwardedHeadersOptions`. The switch only adds the middleware; it does not configure those trust rules. Trust matters because a header supplied by an arbitrary caller must not redefine the server's public identity. See [ASP.NET Core proxy configuration](https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/proxy-load-balancer?view=aspnetcore-10.0). Forwarded headers also do not solve Windows authentication's connection requirements described above.
+Set this switch to `true` when your hosting arrangement needs that middleware. Add `IdentityServer:ReverseProxy:KnownProxies` with explicit proxy IPs and set an absolute `ServerUri` (or `ReverseProxy:AllowedHosts` with exact public hostnames). This configures one trusted hop for forwarded client address, scheme and host. Without the new section, existing host-supplied `ForwardedHeadersOptions` remains unchanged. `X-Forwarded-Prefix` is not accepted by the new configuration; use a fixed `IdentityServer:PathBase` and optional `PathBaseMode: Strip` instead. See [proxy/path configuration](docs/apache-and-nginx.md#application-configuration). Forwarded headers do not authenticate users or fix native Negotiate connection affinity.
 
 #### IdentityServer:PersistKeys
 

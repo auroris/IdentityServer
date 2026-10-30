@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Authentication.Negotiate;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
@@ -18,8 +19,12 @@ public static class IdentityServerExtensions
     public static IServiceCollection AddIdentityServer(this IServiceCollection services, IConfiguration configuration)
     {
         var identityOptions = IdentityProviderOptions.Read(configuration);
+        var hostingOptions = ProxyHostingOptions.Read(configuration);
         TokenKeyStore.Validate(configuration);
         services.AddSingleton(identityOptions);
+        services.AddSingleton(hostingOptions);
+        if (hostingOptions.HasProxyConfiguration)
+            services.Configure<Microsoft.AspNetCore.Builder.ForwardedHeadersOptions>(hostingOptions.Configure);
         services.TryAddSingleton<IUserProfileProvider>(_ =>
         {
             if (identityOptions.Provider != DirectoryProvider.Windows)
@@ -30,18 +35,28 @@ public static class IdentityServerExtensions
         // Negotiate proves who the user is; OpenIddict turns that identity into tokens
         // applications can use. The fallback policy also protects newly added application routes
         // unless they explicitly opt into anonymous access.
-        services.AddAuthentication(NegotiateDefaults.AuthenticationScheme).AddNegotiate(options =>
+        var authentication = services.AddAuthentication(identityOptions.AuthenticationScheme);
+        if (identityOptions.Authentication == BrowserAuthenticationMode.ProxyKerberos)
         {
-            options.Events = new NegotiateEvents
+            services.AddSingleton(new ProxyKerberosOptions(configuration, hostingOptions));
+            authentication.AddScheme<AuthenticationSchemeOptions, ProxyKerberosHandler>(ProxyKerberosOptions.Scheme, _ => { });
+        }
+        else
+        {
+            authentication.AddNegotiate(options =>
             {
-                OnAuthenticated = context =>
+                options.Events = new NegotiateEvents
                 {
-                    if (!identityOptions.Allows(context.Principal))
-                        context.Fail("Kerberos authentication is required by this server.");
-                    return System.Threading.Tasks.Task.CompletedTask;
-                }
-            };
-        }).AddCookie();
+                    OnAuthenticated = context =>
+                    {
+                        if (!identityOptions.Allows(context.Principal))
+                            context.Fail("Kerberos authentication is required by this server.");
+                        return System.Threading.Tasks.Task.CompletedTask;
+                    }
+                };
+            });
+        }
+        authentication.AddCookie();
         services.AddAuthorization(options => options.FallbackPolicy = options.DefaultPolicy);
         services.AddCors();
         IdentityServer.Add(services, configuration);
@@ -88,13 +103,20 @@ public static class IdentityServerExtensions
         if (env.IsDevelopment())
             app.UseDeveloperExceptionPage();
 
-        if (configuration.GetValue<bool>("IdentityServer:UseForwardedHeaders"))
+        var hostingOptions = app.ApplicationServices.GetRequiredService<ProxyHostingOptions>();
+        app.UseMiddleware<ProxyConnectionMiddleware>();
+        if (hostingOptions.UseForwardedHeaders)
         {
             // This must precede authentication so issuer generation sees the public URL.
-            // Enabling the middleware alone does not configure which proxies or headers to trust.
             app.UseForwardedHeaders();
-            logger.LogInformation("Forwarded-header middleware is enabled. Configure trusted proxies and forwarded headers in the host so issuer detection sees the public scheme and host.");
+            if (hostingOptions.HasProxyConfiguration)
+                logger.LogInformation("Forwarded headers accept one hop from {ProxyCount} configured proxies for hosts {PublicHosts}.", hostingOptions.KnownProxies.Length, string.Join(", ", hostingOptions.AllowedHosts));
+            else
+                logger.LogInformation("Forwarded-header middleware uses host-supplied options. Configure ReverseProxy for explicit proxy trust, or configure ForwardedHeadersOptions in the host.");
         }
+        app.UseMiddleware<PathBaseMiddleware>();
+        if (hostingOptions.PathBase.HasValue)
+            logger.LogInformation("Application path is {PathBase}; proxy path mode is {PathBaseMode}.", hostingOptions.PathBase, hostingOptions.PathBaseMode);
 
         // Order matters: routing supplies endpoint metadata, CORS handles browser preflight,
         // and OpenIddict handles discovery/token requests inside UseAuthentication. Those protocol

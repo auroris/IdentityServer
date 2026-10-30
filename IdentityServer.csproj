@@ -5,7 +5,7 @@
     <AssemblyName>IdentityServer</AssemblyName>
     <RootNamespace>IdentityServer</RootNamespace>
     <!-- Keep sibling projects out of the root web project's source and content globs. -->
-    <DefaultItemExcludes>$(DefaultItemExcludes);ActiveDirectory\**;IdentityServer.Core\**;tests\**;artifacts\**</DefaultItemExcludes>
+    <DefaultItemExcludes>$(DefaultItemExcludes);**\bin\**;**\obj\**;ActiveDirectory\**;IdentityServer.Core\**;tests\**;artifacts\**;deploy\**</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>

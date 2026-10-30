@@ -43,10 +43,11 @@ namespace IdentityServer
             else if (context.User.Identity?.IsAuthenticated == true)
             {
                 // IIS authentication bypasses Negotiate's OnAuthenticated event, so enforce the
-                // same requirement here as at the OIDC authorization endpoint. Never trust headers.
+                // same requirement here as at the OIDC authorization endpoint. Only the selected
+                // authentication handler may establish the principal, including ProxyKerberos.
                 if (!context.RequestServices.GetRequiredService<IdentityProviderOptions>().Allows(context.User))
                 {
-                    _logger.LogWarning("Rejecting authenticated request: this server requires Kerberos.");
+                    _logger.LogWarning("Rejecting authenticated request: its authentication type does not match the configured browser authentication mode.");
                     context.Response.StatusCode = StatusCodes.Status403Forbidden;
                     return;
                 }
@@ -54,7 +55,7 @@ namespace IdentityServer
             }
             else
             {
-                _logger.LogDebug("Requesting Negotiate credentials for unauthenticated {Method} {Path} from {RemoteIp}. An initial 401 challenge is normal; the client must answer it before this protected endpoint can run.",
+                _logger.LogDebug("Invoking the configured browser authentication challenge for unauthenticated {Method} {Path} from {RemoteIp}.",
                     context.Request.Method, context.Request.Path,
                     context.Connection.RemoteIpAddress);
                 await context.ChallengeAsync();

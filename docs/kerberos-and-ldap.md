@@ -1,10 +1,10 @@
 # Kerberos and LDAP deployment
 
-The default Windows setup remains unchanged. Select an explicit directory provider to use AD, Samba AD or FreeIPA through portable LDAP, including on Linux. Authentication verifies the person through the operating system's Negotiate/Kerberos handler; directory lookup runs separately with the server's credentials. No user passwords are collected by IdentityServer.
+The default Windows setup remains unchanged. Select an explicit directory provider to use AD, Samba AD or FreeIPA through portable LDAP, including on Linux. Authentication verifies the person through the operating system's Negotiate/Kerberos handler or an explicitly configured Kerberos-authenticating proxy; directory lookup runs separately with the server's credentials. No user passwords are collected by IdentityServer.
 
 ## Selection and configuration
 
-`IdentityServer:Authentication:Mode` is `Auto`, `Negotiate` or `Kerberos`. Auto permits the existing Windows Negotiate behavior, except with FreeIPA, and requires Kerberos on Linux. Explicit Kerberos mode rejects identities reporting NTLM or an unknown protocol. It applies to token issuance and default protected application routes, including identities supplied by IIS. Anonymous endpoints and routes naming their own authentication schemes retain their existing behavior. Hosts must expose the actual protocol: a generic `Negotiate` label is insufficient proof of Kerberos.
+`IdentityServer:Authentication:Mode` is `Auto`, `Negotiate`, `Kerberos` or explicit `ProxyKerberos`. Auto permits the existing Windows Negotiate behavior, except with FreeIPA, and requires Kerberos on Linux. Explicit Kerberos mode rejects identities reporting NTLM or an unknown protocol. It applies to token issuance and default protected application routes, including identities supplied by IIS. Anonymous endpoints and routes naming their own authentication schemes retain their existing behavior. Hosts must expose the actual protocol: a generic `Negotiate` label is insufficient proof of Kerberos. ProxyKerberos uses a Kerberos-authenticating Apache/Nginx front server with separate trust settings; see [Apache and Nginx hosting](apache-and-nginx.md). Auto never accepts forwarded identity headers.
 
 `IdentityServer:Directory:Provider` is `Auto`, `Windows`, `ActiveDirectory`, `SambaAd` or `FreeIpa`. Auto chooses Windows on Windows when no directory server is configured; otherwise it selects portable ActiveDirectory. FreeIPA must be selected explicitly and requires Kerberos. Windows uses automatic discovery/process credentials and rejects additional LDAP settings. The resolved provider and authentication mode are logged at startup. Settings are case-insensitive and changes require a restart. Failed authentication or directory access never causes a provider fallback.
 
@@ -61,6 +61,8 @@ AD/Samba retain SID subjects; FreeIPA uses `ipaUniqueID`. Moving existing people
 
 ## Linux setup
 
+These steps use native Kestrel Kerberos. For Apache/Nginx, follow the [proxy deployment guide](apache-and-nginx.md), which places the HTTP keytab at the front server instead.
+
 1. Install a supported ASP.NET Core 10 runtime, the distribution's Kerberos/GSSAPI libraries and tools, and OpenLDAP/SASL GSSAPI client libraries. Configure domain DNS, synchronized time, `/etc/krb5.conf`, and LDAP CA trust.
 2. Have the directory administrator provision an HTTP service principal for the **public hostname**, for example `HTTP/identity.example.com@EXAMPLE.COM`, and its keytab. Use FreeIPA's service/keytab tools or AD/Samba's domain tools as appropriate. Protect the keytab and set `KRB5_KTNAME` in the application's service environment. A domain/realm join can provision the host but is not performed by this application. See [Microsoft's Linux Kerberos setup](https://learn.microsoft.com/en-us/aspnet/core/security/authentication/windowsauth?view=aspnetcore-10.0#linux-and-macos-environment-configuration).
 3. Configure a directory provider above, including either LDAP bind credentials or a renewable process credential cache. Set `IdentityServer:ServerUri` to the public HTTPS address and configure the existing clients, redirect hosts and group patterns.
@@ -68,7 +70,7 @@ AD/Samba retain SID subjects; FreeIPA uses `ipaUniqueID`. Moving existing people
 5. Publish for the target architecture. For x64: `dotnet publish IdentityServer.csproj -c Release -r linux-x64 --self-contained false -o artifacts/linux`. Copy the output to Linux and supply deployment settings (`appsettings.Local.json` is not published). Run `dotnet IdentityServer.dll` with the publish directory as the working directory. Configure Kestrel HTTPS and process supervision, for example systemd.
 6. Obtain a Kerberos ticket on the client and configure browser trust for the public hostname. Run the deployment checks below.
 
-A reverse proxy forwarding Negotiate to Kestrel must maintain persistent one-to-one connection affinity. Forwarded headers do not solve that requirement or service-principal configuration. See [Kestrel Windows authentication guidance](https://learn.microsoft.com/en-us/aspnet/core/security/authentication/windowsauth?view=aspnetcore-10.0#kestrel).
+A reverse proxy forwarding native Negotiate to Kestrel must maintain persistent one-to-one connection affinity. Forwarded headers do not solve that requirement or service-principal configuration. The [Apache/Nginx templates](apache-and-nginx.md) instead authenticate Kerberos at the proxy, using the explicit ProxyKerberos mode. Their HTTP keytab belongs to the proxy; outbound LDAP credentials still belong to IdentityServer. See [Kestrel Windows authentication guidance](https://learn.microsoft.com/en-us/aspnet/core/security/authentication/windowsauth?view=aspnetcore-10.0#kestrel).
 
 ## Persistent token keys
 

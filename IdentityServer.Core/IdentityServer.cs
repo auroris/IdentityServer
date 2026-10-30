@@ -14,7 +14,6 @@ using static OpenIddict.Abstractions.OpenIddictConstants;
 using static OpenIddict.Server.OpenIddictServerEvents;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Authentication;
-using Microsoft.AspNetCore.Authentication.Negotiate;
 
 namespace IdentityServer
 {
@@ -210,9 +209,10 @@ namespace IdentityServer
                             HttpRequest request = context.Transaction.GetHttpRequest()
                                 ?? throw new InvalidOperationException("The ASP.NET Core request cannot be retrieved.");
 
-                            // The Negotiate scheme handles the exchange itself on Kestrel and defers to IIS Windows
-                            // Authentication when hosted there, so the same call works under both servers.
-                            AuthenticateResult result = await request.HttpContext.AuthenticateAsync(NegotiateDefaults.AuthenticationScheme);
+                            var identityOptions = request.HttpContext.RequestServices.GetRequiredService<IdentityProviderOptions>();
+                            // Native Negotiate defers to IIS where appropriate. ProxyKerberos only
+                            // accepts the principal attested by the configured authenticating proxy.
+                            AuthenticateResult result = await request.HttpContext.AuthenticateAsync(identityOptions.AuthenticationScheme);
                             if (result.None)
                             {
                                 // Nothing has challenged yet: OpenIddict handles this endpoint inside the
@@ -222,26 +222,28 @@ namespace IdentityServer
                                 // HTTP/1.1), and the Negotiate handler completes the exchange on that
                                 // request before this handler runs again. IIS may have already
                                 // authenticated the request, in which case no new challenge is needed.
-                                logger.LogDebug("Issuing Negotiate challenge for authorization request from {RemoteIp}. This initial 401 asks the browser to authenticate and is normal; repeated challenges can indicate that the client is not answering or the credentials are not accepted.",
-                                    request.HttpContext.Connection.RemoteIpAddress);
-                                await request.HttpContext.ChallengeAsync(NegotiateDefaults.AuthenticationScheme);
+                                // ProxyKerberos instead returns 403: the front server must authenticate
+                                // the browser and must never forward a backend Negotiate exchange.
+                                logger.LogDebug("Issuing {Scheme} challenge for authorization request from {RemoteIp}.",
+                                    identityOptions.AuthenticationScheme, request.HttpContext.Connection.RemoteIpAddress);
+                                await request.HttpContext.ChallengeAsync(identityOptions.AuthenticationScheme);
                                 context.HandleRequest();
                                 return;
                             }
 
                             if (!result.Succeeded)
                             {
-                                logger.LogWarning("Negotiate authentication failed for authorization request from {RemoteIp}: {Failure}. No token claims were built. Check the credentials and authentication configuration on the host.",
+                                logger.LogWarning("Browser authentication failed for authorization request from {RemoteIp}: {Failure}. No token claims were built. Check the credentials and authentication configuration on the host.",
                                     request.HttpContext.Connection.RemoteIpAddress,
                                     result.Failure?.Message ?? "(no details)");
                                 context.Reject(error: Errors.AccessDenied, description: "Authentication failed.");
                                 return;
                             }
 
-                            var identityOptions = request.HttpContext.RequestServices.GetRequiredService<IdentityProviderOptions>();
                             if (!identityOptions.Allows(result.Principal))
                             {
-                                logger.LogWarning("Authorization rejected: Kerberos is required but the authenticated identity reports {AuthenticationType}.", result.Principal?.Identity?.AuthenticationType);
+                                logger.LogWarning("Authorization rejected: authentication type {AuthenticationType} does not satisfy configured mode {AuthenticationMode}.",
+                                    result.Principal?.Identity?.AuthenticationType, identityOptions.Authentication);
                                 context.Reject(error: Errors.AccessDenied, description: "Kerberos authentication is required.");
                                 return;
                             }
