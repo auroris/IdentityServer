@@ -2,7 +2,7 @@
 
 IdentityServer lets applications sign people in with their existing Windows accounts. Windows verifies the account, and this server issues tokens that the application can use to identify the person. Domain accounts can also supply profile details and group memberships from **Active Directory (AD)**, an organization's directory of accounts and other resources.
 
-The sign-in protocol is **OpenID Connect (OIDC)**, implemented with [OpenIddict](https://documentation.openiddict.com/). The web application runs on **ASP.NET Core**, Microsoft's .NET web framework. Run this repository as a standalone server, or use its core library inside your own ASP.NET Core application. Optional libraries provide directory searches for features such as people pickers and telephone directories.
+The sign-in protocol is **OpenID Connect (OIDC)**, implemented with [OpenIddict](https://documentation.openiddict.com/). The web application runs on **ASP.NET Core**, Microsoft's .NET web framework. Run this repository as a standalone server, or use its core library inside your own ASP.NET Core application. The shared Active Directory library can also be used independently to read directory data.
 
 > **Note:** "IdentityServer" in this project refers to the assembly name and configuration section — it is **not** related to Duende IdentityServer.
 
@@ -34,7 +34,6 @@ The sign-in protocol is **OpenID Connect (OIDC)**, implemented with [OpenIddict]
 - [Supported flows, scopes, and claims](#supported-flows-scopes-and-claims)
 - [Using the core from another repository](#using-the-core-from-another-repository)
 - [Shared libraries](#shared-libraries)
-  - [Directory lookup settings](#directory-lookup-settings)
 - [Testing](#testing)
   - [Testing with oidcdebugger.com](#testing-with-oidcdebuggercom)
 - [Reading the logs](#reading-the-logs)
@@ -79,7 +78,9 @@ Three identities appear in this setup: the **person** signing in, the **client a
 | Redirect URI / callback | A URL owned by the client application where the browser returns after sign-in. It is different from IdentityServer's own URL. |
 | Claim | A named fact in a token, such as an account identifier, name or role. The receiving application decides what access those facts permit. |
 | Scope | A category of information requested by the client, such as `profile`, `email` or `roles`. Requesting a scope does not create missing directory data. |
-| ID token / access token | An ID token tells the client who signed in. An access token is presented to an API to request access. They have different purposes and should not be substituted for one another. |
+| Token | Data issued as evidence of identity or access. The recipient checks who issued it, whether it was altered and whether it has expired before accepting it. |
+| ID token / access token | An ID token tells the client who signed in. An access token is presented to an API, a service called by application code, to request access. They have different purposes and should not be substituted for one another. |
+| Role | A label, such as `MyApp Readers`, that an application uses in access decisions. Sending an AD group name as a role does not itself enforce the application's permissions. |
 
 In the authorization code flow, the normal sequence is:
 
@@ -286,7 +287,7 @@ Sets the **issuer**, the server identity clients expect in discovery and tokens.
 
 Defaults to `false`. A reverse proxy can receive `https://identity.example.com` and forward it internally as HTTP to a different address. **Forwarded headers** describe the original request: `X-Forwarded-Proto` carries the scheme (`http`/`https`), and `X-Forwarded-Host` carries the hostname. The middleware can use them so issuer and endpoint generation see the public address.
 
-Set this switch to `true` when your hosting arrangement needs that middleware, and configure accepted headers and trusted proxy addresses in the host's `ForwardedHeadersOptions`. The switch only adds the middleware; it does not configure those trust rules. Trust matters because a header supplied by an arbitrary caller must not redefine the server's public identity. Forwarded headers also do not solve Windows authentication's connection requirements described above.
+Set this switch to `true` when your hosting arrangement needs that middleware, and configure accepted headers and trusted proxy addresses in the host's `ForwardedHeadersOptions`. The switch only adds the middleware; it does not configure those trust rules. Trust matters because a header supplied by an arbitrary caller must not redefine the server's public identity. See [ASP.NET Core proxy configuration](https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/proxy-load-balancer?view=aspnetcore-10.0). Forwarded headers also do not solve Windows authentication's connection requirements described above.
 
 #### IdentityServer:PersistKeys
 
@@ -391,7 +392,7 @@ OAuth 2.0 defines token-based access to resources; OIDC adds a standard sign-in 
 | Implicit | `id_token`, `token`, `id_token token` | Tokens return directly through the browser, without a separate exchange for those tokens. |
 | Hybrid | `code id_token`, `code token`, `code id_token token` | The browser returns both a code and one or more tokens. |
 
-For a new client, start with authorization code flow and **PKCE (Proof Key for Code Exchange)**. The client generates a random **verifier**, sends a SHA-256-derived **challenge** at authorization time, then supplies the original verifier at token exchange. This ties redemption to the client that started the request, so an intercepted code alone is insufficient. The server supports PKCE but does not call `RequireProofKeyForCodeExchange` to require it globally; configure the client to use it. See [OpenIddict's PKCE documentation](https://documentation.openiddict.com/configuration/proof-key-for-code-exchange).
+For a new client, start with authorization code flow and **PKCE (Proof Key for Code Exchange)**. The client generates a random **verifier**, sends a **challenge** derived from it with SHA-256 (a one-way fingerprint) at authorization time, then supplies the original verifier at token exchange. This ties redemption to the client that started the request, so an intercepted code alone is insufficient. The server supports PKCE but does not call `RequireProofKeyForCodeExchange` to require it globally; configure the client to use it. See [OpenIddict's PKCE documentation](https://documentation.openiddict.com/configuration/proof-key-for-code-exchange).
 
 Include `openid` for sign-in: this implementation adds the required **subject** (`sub`, the person's identifier) in that scope's branch. Add other scopes only for information the client needs. The labels below describe the claims; their actual names are explained afterward.
 
@@ -410,10 +411,7 @@ The server marks these claims for inclusion in both access and ID tokens. It als
 
 ## Using the core from another repository
 
-`IdentityServer.Core` is a class library containing OpenIddict configuration, Windows authentication,
-key persistence, middleware and shared host construction. `IdentityServer.csproj` is a small runnable
-host for that library. It exposes OIDC discovery and the authorization and token endpoints under
-`/connect`. Applications using the library can add their own controllers and services.
+Use `IdentityServer.Core` when your application should host these sign-in endpoints and add its own features. It is a **class library**, code loaded by another application rather than an executable. The root `IdentityServer.csproj` is the small standalone executable that uses it.
 
 | Project | Responsibility |
 |---|---|
@@ -421,68 +419,91 @@ host for that library. It exposes OIDC discovery and the authorization and token
 | `IdentityServer` | Standalone base web host and generic settings |
 | `ActiveDirectory` | Shared AD wrappers, also usable independently |
 
-An application checked out beside this repository references the **library**, not the base web host:
+Create an ASP.NET Core web project targeting .NET 10. Reference the core library so your application owns its entry point and settings. For example, if `MyIdentityHost` and `IdentityServer` are sibling folders, this is a complete `MyIdentityHost.csproj`:
 
 ```xml
-<PropertyGroup>
-  <IdentityServerRoot Condition="'$(IdentityServerRoot)' == ''">$(MSBuildThisFileDirectory)..\IdentityServer</IdentityServerRoot>
-</PropertyGroup>
-<ItemGroup>
-  <ProjectReference Include="$(IdentityServerRoot)\IdentityServer.Core\IdentityServer.Core.csproj" />
-</ItemGroup>
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IdentityServerRoot Condition="'$(IdentityServerRoot)' == ''">$(MSBuildThisFileDirectory)..\IdentityServer</IdentityServerRoot>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="$(IdentityServerRoot)\IdentityServer.Core\IdentityServer.Core.csproj" />
+    <Content Update="appsettings.Local.json" CopyToPublishDirectory="Never" />
+  </ItemGroup>
+</Project>
 ```
 
-Use `IdentityServerHost.Run<Startup>(args)` from the application's `Main`. Expose
-`IdentityServerHost.CreateHostBuilder<Startup>(args)` from its `CreateHostBuilder` method for
-ASP.NET Core integration tests. In the application's startup, register and compose the core:
+`ProjectReference` tells the build to compile and use the source library. `IdentityServerRoot` is an **MSBuild property**, a named value used while building; it is unrelated to `appsettings.json`. The conditional default supports sibling folders while allowing another location with `-p:IdentityServerRoot=C:\src\IdentityServer`.
+
+Replace the new project's `Program.cs` with:
 
 ```csharp
 using IdentityServer;
+using Microsoft.Extensions.Hosting;
 
-public void ConfigureServices(IServiceCollection services)
-{
-    services.AddIdentityServer(configuration);
-    services.AddControllers();
-    // Register this application's services here.
-}
+namespace MyIdentityHost;
 
-public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
+public class Program
 {
-    app.UseIdentityServer(env);
-    app.UseEndpoints(endpoints => endpoints.MapControllers());
+    public static void Main(string[] args) => IdentityServerHost.Run<Startup>(args);
+
+    public static IHostBuilder CreateHostBuilder(string[] args) =>
+        IdentityServerHost.CreateHostBuilder<Startup>(args);
 }
 ```
 
-Here `configuration` is the `IConfiguration` injected into the application's startup constructor.
-`UseIdentityServer` includes routing, CORS, authentication and authorization; map endpoints after it.
-The shared host loads configuration from the consuming application's content root. The base host's
-settings are never inherited. Each application supplies its own hosts, clients, group patterns,
-controllers and configuration; the core has no global `Program.Configuration` dependency.
+`Run` uses the shared configuration and logging setup. Exposing `CreateHostBuilder` also lets ASP.NET Core integration tests construct the host. Add `Startup.cs`:
 
-The standalone server builds and publishes entirely from this repository. An application using
-source project references can update its IdentityServer checkout and rebuild to adopt changes.
-With the property shown above, `-p:IdentityServerRoot=C:\src\IdentityServer` overrides the default
-sibling layout. Test consuming applications against the selected source revision before deploying.
+```csharp
+using IdentityServer;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
-The core exposes standard AD
-attributes; schema-specific aliases and selection/formatting rules belong to consuming applications.
-Custom data providers, integration settings and any HTTP directory endpoints belong to the
-application that implements them.
+namespace MyIdentityHost;
+
+public class Startup
+{
+    private readonly IConfiguration configuration;
+
+    public Startup(IConfiguration configuration) => this.configuration = configuration;
+
+    public void ConfigureServices(IServiceCollection services)
+    {
+        services.AddIdentityServer(configuration);
+        services.AddControllers();
+        // Register this application's services here.
+    }
+
+    public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
+    {
+        app.UseIdentityServer(env);
+        app.UseEndpoints(endpoints => endpoints.MapControllers());
+    }
+}
+```
+
+ASP.NET Core provides `IConfiguration` to the constructor through **dependency injection**, its mechanism for supplying registered services. `ConfigureServices` registers what components are available. `Configure` puts request-processing components in order. `UseIdentityServer` already includes routing, CORS, authentication and authorization; map controllers afterward so its endpoint checks can protect your routes. Use `[AllowAnonymous]` only on routes intended to be public. OpenIddict provides the sign-in endpoints through middleware, so you do not need a controller just to expose them.
+
+Add your own `appsettings.json` in the new application's content root and configure its hosts, clients, groups and keys. The base server's settings are **not inherited** by a project reference. The example project excludes its local settings from publish too; also ignore that file in the consuming repository. Run and publish the consuming project, using the same commands as the standalone project with its project filename substituted.
+
+Because these are source references, updating the IdentityServer checkout and rebuilding adopts its changes. Test the consuming application against that revision before deploying. Keep custom controllers, data providers and organization-specific directory fields in the consuming application; the core can then stay reusable without requiring another organization's directory layout.
 
 ## Shared libraries
 
-`IdentityServer.Core` provides the authentication server and host composition described above.
-`ActiveDirectory` (`ActiveDirectory\ActiveDirectory.csproj`) provides the standard Active Directory
-wrappers (`ADUser`, `ADGroup`, `DirectorySearch`, `LdapHelper`, ...) used to populate sign-in claims.
-It can also be referenced independently by other applications.
+`IdentityServer.Core` provides the server described above. `ActiveDirectory` (`ActiveDirectory/ActiveDirectory.csproj`) wraps the directory APIs in objects such as `ADUser`, `ADGroup` and `DirectorySearch`. “Wraps” means it provides a simpler C# interface over lower-level APIs. It is used for sign-in claims and can also be referenced independently; referencing it does not create a directory website or HTTP endpoints.
 
-An object returned by a `DirectorySearch` holds only the attributes the search loaded: an attribute
-it did not request reads as empty (an empty list, `null` or the default) until `Bind()` opens a live
-connection. Use `ADObject.GetProperty` / `SetProperty` in a consuming application for attributes
-beyond the standard typed accessors.
+**LDAP (Lightweight Directory Access Protocol)** is used to query AD. A search **root** is the starting location in its tree: in `LDAP://OU=People,DC=example,DC=com`, `OU=People` means an organizational unit called People and `DC=example,DC=com` identifies the domain. A **filter** describes which records should match. Replace example roots with locations in your own directory; choosing a root limits the search but does not grant the process account permission to read it.
 
-Both libraries target .NET 10. Active Directory access requires Windows (`System.DirectoryServices`).
-The projects suppress CA1416 platform warnings rather than marking their entire assemblies Windows-only.
+An object returned by `DirectorySearch` contains only the attributes the search loaded. An unrequested field reads as empty/default until `Bind()` opens a live connection. Request needed fields in `PropertiesToLoad` to avoid a separate connection for every result, and dispose wrappers when finished because they can own native directory resources. `ADObject.GetProperty` / `SetProperty` supports extra attributes; application-specific schema and formatting rules belong in the consuming application. A **schema** defines the directory's object types and attributes.
+
+Use bounded searches for user-facing pickers. `Find<T>(howMany)` limits the number returned, while `PageSize` controls batches fetched from the server; paging is needed to retrieve more than a domain controller's unpaged limit. Sorting a limited result afterward sorts only that subset, not the entire directory. `PropertiesToSearch` combines its entries with OR (any may match); `AdditionalFilter` is a trusted raw LDAP condition and must not contain unescaped user input.
+
+Both libraries target .NET 10. Directory access uses Windows-only `System.DirectoryServices`; suppressing the compiler's CA1416 platform warning does not make those calls portable. To use only the AD wrappers, put these elements inside the consuming project's `.csproj`:
 
 ```xml
 <PropertyGroup>
@@ -495,64 +516,84 @@ The projects suppress CA1416 platform warnings rather than marking their entire 
 
 ## Testing
 
-The test projects use xUnit.net v3 4.0.2 (`xunit.v3.mtp-off`), with the VSTest adapter to preserve
-the existing `dotnet test` commands, category filters and Visual Studio Test Explorer support.
-Live-directory tests use xUnit's built-in dynamic skips; no `Xunit.SkippableFact` package is needed.
+Run the automated checks from the repository folder:
 
-Run the project with `dotnet run` (Kestrel, using the ASP.NET Core development certificate for HTTPS) or with the **IIS Express** profile in Visual Studio. The OpenID configuration document is then available at:
+```powershell
+dotnet test IdentityServer.sln
+```
 
-* https://localhost:5001/.well-known/openid-configuration and http://localhost:5000/.well-known/openid-configuration (Kestrel)
-* https://localhost:44353/.well-known/openid-configuration and http://localhost:5000/.well-known/openid-configuration (IIS Express)
+**Host tests** run the application in a test server to check discovery, configuration isolation and route handling without a real domain. **Live-directory tests** make read-only queries against the real domain as the account running the tests; they skip with a reason when that environment is unavailable. A skipped live test does not verify the deployment's AD permissions.
 
-Chrome and Edge complete Windows authentication for `localhost` silently. A non-browser client must speak HTTP/1.1 and support Negotiate; for example `Invoke-WebRequest -UseDefaultCredentials` in PowerShell works, while the curl shipped with Git for Windows is built without SPNEGO and stops at the first `401`.
+To select only live tests, use `dotnet test IdentityServer.sln --filter Category=LiveDirectory`; to omit them, use `--filter "Category!=LiveDirectory"`. **xUnit** is the test framework and **VSTest** is the adapter used by `dotnet test`/Visual Studio Test Explorer; the test project's package references install them during restore.
 
-Run the automated tests with `dotnet test IdentityServer.sln`. The unit and host tests need no domain: they cover anonymous discovery, independent host configuration and unknown-route handling. The tests in the `LiveDirectory` category query the real domain as the signed-in user and skip themselves, with the reason, unless the machine is signed in to a reachable domain; run only them with `dotnet test IdentityServer.sln --filter Category=LiveDirectory`.
+For manual browser testing with the Kestrel development profile, run:
+
+```powershell
+dotnet dev-certs https --trust
+dotnet run --project IdentityServer.csproj --launch-profile IdentityServer
+```
+
+The first command creates/trusts a local development HTTPS certificate; Windows may ask you to approve that trust. It is for this developer machine, not a deployment certificate; see [`dotnet dev-certs`](https://learn.microsoft.com/en-us/dotnet/core/tools/dotnet-dev-certs). The second command uses the URLs in `Properties/launchSettings.json`. Alternatively, select **IIS Express** in Visual Studio; it is the development version of IIS, with authentication enabled by this repository's launch settings.
+
+| How the server was started | Discovery address |
+|---|---|
+| Quick start with `--no-launch-profile` | [HTTP on port 5000](http://localhost:5000/.well-known/openid-configuration) |
+| Kestrel `IdentityServer` profile | [HTTPS on port 5001](https://localhost:5001/.well-known/openid-configuration), or [HTTP on port 5000](http://localhost:5000/.well-known/openid-configuration) |
+| Visual Studio IIS Express profile | [HTTPS on port 44353](https://localhost:44353/.well-known/openid-configuration), or [HTTP on port 5000](http://localhost:5000/.well-known/openid-configuration) |
+
+Use the ports of the profile actually running; starting both hosts on port 5000 causes an address conflict. A browser may sign in silently when it trusts localhost. Command-line clients need Windows authentication support too: PowerShell's `Invoke-WebRequest -UseDefaultCredentials` offers the current account. For curl, inspect `curl --version` for SSPI/SPNEGO support rather than assuming every Windows curl build can authenticate. These features let the client participate in the Windows challenge/response exchange.
 
 ### Testing with oidcdebugger.com
 
-[oidcdebugger.com](https://oidcdebugger.com/) is a browser-based tool for constructing and sending OpenID Connect authorization requests and inspecting the results. Fill in the form fields as described below, then click **Send Request**. Your browser will be redirected to the authorization endpoint, Windows authentication will occur transparently, and the debugger will display the tokens or authorization code returned.
+[oidcdebugger.com](https://oidcdebugger.com/) acts as a test client: it constructs a sign-in request and receives the result at its own callback. Use a test account and only the scopes needed for the test, because the returned claims/codes are sent to that external site. Keep IdentityServer running while testing. Fill in the fields below and select **Send Request**; a trusted browser can complete Windows sign-in silently, while another browser may prompt for credentials.
 
 #### Common fields (all flows)
 
-| Field | Value |
-|---|---|
-| Authorize URI | `http://localhost:5000/connect/authorize` |
-| Redirect URI | `https://oidcdebugger.com/debug` |
-| Client ID | `optional` (registered as a public client in the supplied `appsettings.json`) |
-| Scope | `openid profile email roles` |
-| Nonce | *(leave as auto-generated)* |
+| Field | Value | Why |
+|---|---|---|
+| Authorize URI | `http://localhost:5000/connect/authorize` | Starts sign-in on the quick-start server. Substitute the active HTTPS port or deployment base URL when appropriate. |
+| Redirect URI | `https://oidcdebugger.com/debug` | Returns the result to the debugger, which is acting as the client. |
+| Client ID | `optional` | Matches the test application registered in the supplied settings. |
+| Scope | `openid` for the first check; optionally add `profile email roles` | Starts with identity only; additional scopes request more account details. |
+| State | A fresh random value | Lets a client relate the callback to the request it started. Real applications must check it. |
+| Nonce | Keep a fresh auto-generated value | Ties an ID token to this sign-in attempt and helps detect replay of an older result. |
 
-The `https://oidcdebugger.com` host is already in the default `IdentityServer:Hosts` allowlist. The client ID must also be registered in `IdentityServer:Clients`; `optional` is not a special value. The supplied configuration registers it without a `ClientSecret` for public-client testing, and the IIS Express launch profile uses it for its implicit-flow test.
+The supplied file allows `https://oidcdebugger.com` in `IdentityServer:Hosts` and registers `optional` without a secret. If you replaced those settings with your deployment's values, this test client/host must be deliberately added there to use the debugger. The IIS Express launch profile opens an implicit-flow test with these values; the generic example deployment configuration above does not include them.
 
-#### Implicit flow — returns an ID token directly
+#### Implicit flow — a quick sign-in check
 
 | Field | Value |
 |---|---|
 | Response type | `id_token` |
 | Response mode | `form_post` |
 
-Use `token` instead of `id_token` to receive an access token, or check both to receive both in a single response.
+`form_post` means the browser posts the result as form fields to the callback. Success shows an ID token in the debugger and an `Authorization claims prepared` message in the server log. This checks the browser sign-in and claim-building path without a separate token exchange. It is useful for diagnosis; use the code flow below when configuring a new application. Request `token` instead, or as well, only if you are testing access-token issuance.
 
-#### Authorization code flow — returns a code for server-side exchange
+#### Authorization code flow — test with PKCE
 
 | Field | Value |
 |---|---|
 | Response type | `code` |
-| Response mode | `query` or `form_post` |
-| Token URI | `http://localhost:5000/connect/token` *(required only if using PKCE; see below)* |
+| Response mode | `query` |
+| Use PKCE? | Enabled, with SHA-256 |
+| Token URI | `http://localhost:5000/connect/token`, or the matching HTTPS address |
 
-The debugger will display the authorization `code`. For a **public client** (such as the supplied `optional` client, which omits `ClientSecret`), enable **Use PKCE?** (SHA-256 is recommended). The debugger will auto-generate the code verifier and challenge and can perform the token exchange automatically when Token URI is provided. For **confidential clients**, the debugger cannot supply `client_secret`, so use a tool such as Postman or `curl` to exchange the code manually with the registered client ID and secret:
+`query` puts the code in the callback URL's query string. The debugger supplies the PKCE verifier/challenge and uses the Token URI for exchange. An HTTPS debugger page may be blocked from calling a local HTTP endpoint by browser restrictions; use the HTTPS development profile with a trusted certificate, or perform the exchange from a local tool. A successful return with a code proves authorization worked even if the subsequent exchange fails.
 
+To exchange a fresh code manually in PowerShell, copy the verifier from the **same** debugger request:
+
+```powershell
+$tokenRequest = @{
+    grant_type = "authorization_code"
+    code = "<code returned by the server>"
+    redirect_uri = "https://oidcdebugger.com/debug"
+    client_id = "optional"
+    code_verifier = "<verifier used for that request>"
+}
+Invoke-RestMethod -Method Post -Uri "http://localhost:5000/connect/token" -ContentType "application/x-www-form-urlencoded" -Body $tokenRequest
 ```
-POST http://localhost:5000/connect/token
-Content-Type: application/x-www-form-urlencoded
 
-grant_type=authorization_code
-&code=<code from debugger>
-&redirect_uri=https://oidcdebugger.com/debug
-&client_id=my-confidential-app
-&client_secret=changeme
-```
+PowerShell form-encodes the values, so characters in a code are not accidentally treated as URL separators. Use the original client ID and full redirect URI, not just any allowed host, and redeem the code before its lifetime expires. For a confidential client, use its registered ID and supply `client_secret` from its configured secret source as well; keep the PKCE verifier if that request used PKCE. The token request authenticates the application, so it does not need the user's Windows password.
 
 #### Hybrid flow — returns a code and tokens together
 
@@ -562,7 +603,7 @@ grant_type=authorization_code
 | Response mode | `form_post` |
 | Token URI | `http://localhost:5000/connect/token` |
 
-You can also combine `code` + `token` or all three (`code`, `token`, `id_token`) depending on what the client needs.
+Hybrid combines a direct browser result with a code that still needs an exchange. Use it when testing an existing client that needs that combination. `code token` and `code id_token token` are supported too. Keep PKCE enabled when testing the code exchange; receiving a direct token does not prove that exchange succeeded.
 
 
 ## Reading the logs
@@ -590,32 +631,36 @@ Read a sign-in attempt as a sequence of separate checks. Here, **client** means 
 | `Token endpoint response sizes` | Lengths help diagnose oversized request headers without recording token credentials. Zero means that token was absent, not necessarily an error. This diagnostic covers `/connect/token`; implicit/hybrid tokens returned directly by `/connect/authorize` do not pass through it. |
 | `Error building authorization claims ... during ...` | The stage identifies where preparation stopped. Read the attached exception for the actual cause; successful Windows authentication does not guarantee successful directory lookup or role-pattern processing. |
 
-For directory searches, Debug logs distinguish the number fetched from the number returned after filtering and limits. An empty successful search is different from a lookup failure, which logs at Error level. `Local` and `Global` select the configured directory search roots; they do not mean local Windows accounts versus domain accounts. A capped result is a subset, and sorting it does not make it the first alphabetical results from the whole directory. Group details report `MembersTruncated` when the configured member limit is exceeded.
-
 ## Troubleshooting
+
+Start with the first failed stage in [Reading the logs](#reading-the-logs). A browser password prompt, a rejected application request and an AD read failure involve different accounts/settings; changing a later stage will not fix an earlier failure.
+
+**The server starts, but its home page returns 404.**
+There is no home page in the standalone host. Open `/.well-known/openid-configuration` to check discovery, including the application path if hosted under one. If discovery also returns 404, check the running port, IIS application path and published folder.
+
+**The published application fails before discovery can load.**
+Read the console/startup exception. Confirm the required ASP.NET Core 10 runtime or IIS Hosting Bundle is installed, the content root contains `appsettings.json`, and the process account can read application files and access the configured key directory. Publishing did not copy `appsettings.Local.json`; a setting that worked in development may be absent on the server. If IIS cannot start the .NET process at all, also check the Windows Application event log.
 
 **SPA client receives a 431 (Request Header Fields Too Large) error.**
 This can happen when a user belongs to many AD groups that match `IdentityServer:Groups` — each matching group becomes a `role` claim and the resulting token can exceed the web server's default header size limit. Tighten the regex patterns in `IdentityServer:Groups` to emit only the groups the relying party actually needs, and check the receiving server or proxy's header limits. The log warns while building claims above 4,096 role-name characters (an estimate before token encoding), and when an access token returned by `/connect/token` exceeds 8,192 characters. These thresholds are diagnostic hints, not guaranteed limits for every application.
 
 **Every request to the authorization endpoint gets a 401 with `WWW-Authenticate: Negotiate` and never completes.**
-The client is not answering the challenge. Browsers do this only for sites they trust for integrated authentication (see [Prerequisites](#prerequisites)); command-line clients need SPNEGO support and HTTP/1.1, since Negotiate cannot complete over HTTP/2. The log line `Negotiate is not supported with HTTP/2` on Kestrel means the client did not downgrade.
+The Windows exchange is not completing. Check whether the browser trusts the hostname, whether the offered account can authenticate to the server, and whether a command-line client supports Negotiate. A first 401 is expected; repeated 401s without later claim-building logs indicate a problem. The message `Negotiate is not supported with HTTP/2` means the client did not switch to HTTP/1.1 for the exchange. Changing a client secret will not repair this Windows-authentication step.
 
 **Firefox prompts for Windows credentials instead of signing in automatically.**
-Firefox supports Kerberos/SPNEGO and NTLM, but the server may need to be explicitly trusted. For the local IIS Express profile, open `about:config` and add `https://localhost:44353` to both `network.negotiate-auth.trusted-uris` and `network.automatic-ntlm-auth.trusted-uris`. Preserve any existing entries, separated by commas. Use the corresponding origin when testing another host or port. Restart Firefox and retry in a normal window. These preferences can also be managed by Firefox's [Authentication enterprise policy](https://firefox-admin-docs.mozilla.org/reference/policies/authentication/).
+The server address may not be trusted for automatic Windows sign-in. For the local IIS Express profile, open `about:config` and add `https://localhost:44353` to `network.negotiate-auth.trusted-uris` and `network.automatic-ntlm-auth.trusted-uris`, preserving existing comma-separated entries. Use the actual origin for another host/port, then restart Firefox and retry in a normal window. Limit this trust to servers where automatic Windows sign-in is intended. Managed devices can use Firefox's [Authentication enterprise policy](https://firefox-admin-docs.mozilla.org/reference/policies/authentication/) instead of individual preferences.
 
 **Manually entered Windows credentials succeed, but the debugger returns `server_error`.**
-Check the server log for `Error building authorization claims` and an Active Directory lookup failure for a local account. Older versions used the `Local` logon SID to classify accounts, so network logons could incorrectly reach the AD lookup. Account classification now uses the [Local account SID](https://learn.microsoft.com/en-us/troubleshoot/sql/database-engine/security/block-remote-use-local-accounts), which Windows adds for local accounts independently of the logon type.
+Find `Error building authorization claims ... during ...` and read its exception. Windows can verify the person while the server's separate AD read fails, or a group pattern is invalid. Check the account and stage named in the log. Local accounts should skip AD; classification uses Windows' `Local account` SID (`S-1-5-113`). Older builds used the `Local` logon SID, which described how the person logged in rather than where the account lived, and could misclassify browser logons. Update an older deployment if that matches the failure.
 
 **Browser prompts for Windows credentials repeatedly (401 loop).**
-Check the application log for a rejected `client_id` or `redirect_uri`. Older versions returned `invalid_client` (HTTP 401) for these authorization request errors; IIS attached a Windows challenge to that response, so the browser kept prompting even after Windows authentication succeeded. These errors now return `invalid_request` (HTTP 400). Use a client ID registered in `IdentityServer:Clients` and an allowed redirect host.
-
-If the request is valid, confirm that both Anonymous Authentication and Windows Authentication are enabled under IIS. Under either host, confirm the browser trusts the site for integrated authentication (for Edge and Chrome, the site must be in the Local Intranet zone or explicitly allowed), and that the credentials being offered are valid for the server.
+Check the logs before entering credentials repeatedly. In older versions, an unregistered client or rejected redirect produced HTTP 401, which IIS could turn into another password challenge even after Windows sign-in succeeded. Current authorization-request checks return HTTP 400 (`invalid_request`) for those failures. Correct the client/redirect configuration if it is named in the log. Otherwise, confirm both IIS authentication features are enabled and the browser trusts the hostname and is offering valid credentials.
 
 **Tokens issued before a restart fail validation afterwards.**
-Expected when `IdentityServer:PersistKeys` is `false` (the default). Set it to `true` to persist keys across restarts. If you prefer ephemeral keys, keep the process alive: configure the IIS app pool to suspend rather than terminate on idle and to recycle on a predictable schedule, or run it as a Windows service on Kestrel.
+Fresh keys after a restart can no longer support earlier tokens/codes in the same way. Enable `IdentityServer:PersistKeys`, retain the same `DataPath` and key files, and check that the process account can read them. If persistence is already enabled, check whether deployment replaced the key directory or moved to another Windows machine. Changing the setting now preserves future keys; it cannot recover keys already lost. Tokens also expire normally, independently of restarts.
 
 **A relying party rejects the discovery document or the tokens over plain HTTP.**
-The server serves HTTP happily, but most OpenID Connect client libraries refuse an `http://` authority by default (`RequireHttpsMetadata` in ASP.NET Core). Either front the server with HTTPS or relax that setting on the client for an isolated intranet.
+Allowing HTTP on this server does not override the client's transport rules. ASP.NET Core OIDC clients normally require HTTPS discovery (`RequireHttpsMetadata`), and cross-site sign-in cookies may require HTTPS as well. Configure HTTPS for the server and client. If deliberately testing over HTTP, any relaxation belongs in the test client's configuration; changing token keys or redirect hosts does not remove an HTTPS requirement.
 
 **Issuer in tokens doesn't match the URL clients use.**
 Either set `IdentityServer:ServerUri` to the canonical public URL explicitly, or — if behind a reverse proxy — enable `IdentityServer:UseForwardedHeaders` and configure the host to accept the scheme and host headers from that trusted proxy. Check the resulting discovery document; enabling the middleware alone does not configure the accepted headers or proxy addresses.
@@ -624,14 +669,20 @@ Either set `IdentityServer:ServerUri` to the canonical public URL explicitly, or
 Either the `client_id` is not in `IdentityServer:Clients`, or the `redirect_uri` host is not in `IdentityServer:Hosts`. The application log records which check failed, the client ID and, for a rejected redirect, the host name. Token endpoint client authentication failures still return `invalid_client`.
 
 **Expected role claims are missing.**
-Verify the user is on a domain-joined machine (local accounts do not get role claims) and that the group names match the regex patterns in `IdentityServer:Groups`. Remember the patterns are regex — plain strings like `"MyServer Admins"` will match, but a pattern like `"MyServer *"` does **not** mean glob-style wildcard; it means the literal letter `r` zero or more times. Use `"MyServer .*"` for "starts with 'MyServer '".
+Check that the signed-in identity is a domain account, the request includes `roles`, the user belongs directly to the expected AD group, and its name matches `IdentityServer:Groups`. Use the Debug group counts to see whether memberships were found but filtered out. Patterns are regular expressions: use `^MyApp .*$` for names starting with `MyApp `, not `MyApp *`. Restart after editing patterns and obtain a new token; previously issued tokens and a client's existing session will not acquire new roles automatically.
+
+**An API cannot read an access token even though sign-in succeeded.**
+This server keeps OpenIddict's access-token encryption enabled. A generic JWT signature validator without the required decryption configuration cannot read that token. Check the API's OpenIddict/token validation setup and intended issuer. An ID token serves the client's sign-in and should not be sent to the API as a workaround. See [token formats](https://documentation.openiddict.com/configuration/token-formats).
+
+**The debugger returns a code, but token exchange fails.**
+Check the token request's original client ID, full callback URL, PKCE verifier and, for a confidential client, secret. A code from another request or a verifier generated afterward will not match. Start a fresh sign-in if the code expired or keys changed during a restart. If no token request appears in the server log, inspect the browser's network errors for HTTPS/CORS restrictions; authorization through a browser redirect and a JavaScript token request are separate operations.
 
 **Logs show a domain user authenticated via NTLM instead of Kerberos.**
-This usually means the server's SPN is not registered in Active Directory. Without a matching SPN, the browser cannot obtain a Kerberos ticket and falls back to NTLM. Register the SPN with `setspn -S HTTP/yourserver.domain.com DOMAIN\AppPoolAccount` and restart the application pool. NTLM is expected and normal for local machine accounts — the concern is only when a domain account shows up as NTLM in the logs.
+NTLM can be a valid fallback, especially for local accounts. For a domain account where Kerberos is expected, check the hostname used by the client and the matching SPN. An SPN tells AD which account represents that HTTP service; a missing, duplicate or incorrectly owned entry can prevent ticket use. Ask the domain administrator to verify ownership against the actual host's authentication setup before registering one. Kestrel's Negotiate handler uses the service account; IIS ownership depends on its authentication configuration, so a generic “register it on the app pool account” command is not correct for every deployment. See [Windows authentication configuration](https://learn.microsoft.com/en-us/aspnet/core/security/authentication/windowsauth?view=aspnetcore-10.0).
 
 **Windows authentication succeeds sometimes but fails intermittently with Kerberos.**
-The most common cause is clock skew — Kerberos requires the server and domain controller clocks to be within 5 minutes of each other. Check `w32tm /query /status` on the server and compare against the DC. VMs are especially prone to clock drift after snapshots or resume from suspend.
+One cause is **clock skew**, a time difference between machines. Kerberos uses time-limited tickets, so machines outside the domain's permitted time tolerance can reject otherwise valid credentials. Run `w32tm /query /status` to inspect Windows time synchronization and compare the server's time/source with the domain controller's. A resumed or restored virtual machine may need its time synchronization checked. Also inspect the authentication error rather than assuming every intermittent failure is a clock problem.
 
 ## License
 
-MIT
+[MIT](LICENSE). The license file contains the permission notice and conditions for reuse.
