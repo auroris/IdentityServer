@@ -7,24 +7,20 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.IdentityModel.Tokens;
 using OpenIddict.Abstractions;
 using System;
-using System.IO;
 using System.Linq;
 using System.Security.Claims;
 using System.Security.Cryptography;
-using System.Text;
-using System.Security.Principal;
 using static OpenIddict.Abstractions.OpenIddictConstants;
 using static OpenIddict.Server.OpenIddictServerEvents;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Negotiate;
-using ActiveDirectory;
 
 namespace IdentityServer
 {
     /// <summary>
     /// Configures the OpenIddict server and validation stack.
-    /// Windows Authentication identifies the person; Active Directory supplies profile and group
+    /// Negotiate/Kerberos identifies the person; the selected directory supplies profile and group
     /// details; OpenIddict issues tokens that client applications can understand. Claims are the
     /// named facts carried in those tokens, such as the account identifier, email or role.
     /// Uses OpenIddict's degraded mode, meaning this application supplies client validation and
@@ -38,7 +34,7 @@ namespace IdentityServer
     /// <para>
     /// When <c>IdentityServer:PersistKeys</c> is <see langword="true"/>, signing and encryption keys
     /// are persisted to disk (under <c>IdentityServer:DataPath</c>), protected at rest with Windows
-    /// DPAPI, so the same key material survives app pool recycles and avoids JWKS cache mismatches
+    /// DPAPI or password-encrypted PKCS#8, so keys survive restarts and avoid JWKS cache mismatches
     /// in OIDC clients. When <see langword="false"/> (default), ephemeral keys are generated on
     /// every startup.
     /// </para>
@@ -76,41 +72,6 @@ namespace IdentityServer
             .CreateLogger<IdentityServer>();
 
         /// <summary>
-        /// Loads a persistent RSA key from <paramref name="filename"/> under <c>IdentityServer:DataPath</c>
-        /// (defaulting to a <c>keys</c> subfolder of the app base directory), generating and saving a new
-        /// 2048-bit key if the file does not yet exist.
-        /// </summary>
-        /// <remarks>
-        /// Private key material is encrypted at rest with Windows DPAPI
-        /// (<see cref="DataProtectionScope.LocalMachine"/>); the raw key bytes are never written to disk
-        /// in plaintext. Only processes running on the same machine can decrypt the file.
-        /// Machine protection is not an account-level access rule: restrict file permissions to
-        /// the server account and administrators. Copying the files to a new host is not a key migration.
-        /// </remarks>
-        private static RsaSecurityKey LoadOrCreateRsaKey(IConfiguration configuration, string filename)
-        {
-            var dataPath = configuration.GetValue<string>("IdentityServer:DataPath")
-                           ?? Path.Combine(AppContext.BaseDirectory, "keys");
-            System.IO.Directory.CreateDirectory(dataPath);
-            var keyPath = Path.Combine(dataPath, filename);
-
-            var rsa = RSA.Create(2048);
-            if (File.Exists(keyPath))
-            {
-                byte[] decrypted = ProtectedData.Unprotect(
-                    File.ReadAllBytes(keyPath), null, DataProtectionScope.LocalMachine);
-                rsa.ImportFromPem(Encoding.UTF8.GetString(decrypted));
-            }
-            else
-            {
-                byte[] pem = Encoding.UTF8.GetBytes(rsa.ExportPkcs8PrivateKeyPem());
-                File.WriteAllBytes(keyPath, ProtectedData.Protect(pem, null, DataProtectionScope.LocalMachine));
-            }
-
-            return new RsaSecurityKey(rsa);
-        }
-
-        /// <summary>
         /// Registers OpenIddict server and validation services in the DI container.
         /// Reads <c>IdentityServer:ServerUri</c>, <c>IdentityServer:Hosts</c>, and
         /// <c>IdentityServer:Groups</c> from the consuming host's configuration.
@@ -123,7 +84,7 @@ namespace IdentityServer
             // Program state shared between independently configured servers.
             var validGroupPatterns = new Lazy<Regex[]>(() =>
                 (configuration.GetSection("IdentityServer:Groups").Get<string[]>() ?? [])
-                    .Select(g => new Regex(g, RegexOptions.IgnoreCase | RegexOptions.Compiled))
+                    .Select(g => new Regex(g, RegexOptions.IgnoreCase | RegexOptions.Compiled, TimeSpan.FromSeconds(1)))
                     .ToArray());
             services.AddOpenIddict().AddServer(options =>
             {
@@ -132,8 +93,8 @@ namespace IdentityServer
                 // Reusing both keys across restarts preserves those relationships; fresh keys can
                 // invalidate existing tokens and make outstanding codes unreadable.
                 if (configuration.GetValue<bool>("IdentityServer:PersistKeys"))
-                    options.AddSigningKey(LoadOrCreateRsaKey(configuration, "signing-key.bin"))
-                           .AddEncryptionKey(LoadOrCreateRsaKey(configuration, "encryption-key.bin"));
+                    options.AddSigningKey(TokenKeyStore.LoadOrCreate(configuration, "signing-key"))
+                           .AddEncryptionKey(TokenKeyStore.LoadOrCreate(configuration, "encryption-key"));
                 else
                     options.AddSigningKey(new RsaSecurityKey(RSA.Create(2048)))
                            .AddEncryptionKey(new RsaSecurityKey(RSA.Create(2048)));
@@ -235,7 +196,7 @@ namespace IdentityServer
                         return default;
                     }));
 
-                // Scopes are the claim categories the client requests. Windows proves identity first;
+                // Scopes are the claim categories the client requests. Negotiate proves identity first;
                 // directory lookup then supplies the requested facts. Success at one step does not
                 // guarantee the next step succeeds (for example, the domain controller may be offline).
                 options.AddEventHandler<HandleAuthorizationRequestContext>(builder =>
@@ -243,7 +204,7 @@ namespace IdentityServer
                     {
                         var logger = GetLogger(context.Transaction.GetHttpRequest()?.HttpContext);
                         string? winAccountName = null;
-                        string stage = "Windows authentication";
+                        string stage = "Negotiate authentication";
                         try
                         {
                             HttpRequest request = context.Transaction.GetHttpRequest()
@@ -261,7 +222,7 @@ namespace IdentityServer
                                 // HTTP/1.1), and the Negotiate handler completes the exchange on that
                                 // request before this handler runs again. IIS may have already
                                 // authenticated the request, in which case no new challenge is needed.
-                                logger.LogDebug("Issuing Negotiate challenge for authorization request from {RemoteIp}. This initial 401 asks the browser for Windows credentials and is normal; repeated challenges can indicate that the client is not answering or the credentials are not accepted.",
+                                logger.LogDebug("Issuing Negotiate challenge for authorization request from {RemoteIp}. This initial 401 asks the browser to authenticate and is normal; repeated challenges can indicate that the client is not answering or the credentials are not accepted.",
                                     request.HttpContext.Connection.RemoteIpAddress);
                                 await request.HttpContext.ChallengeAsync(NegotiateDefaults.AuthenticationScheme);
                                 context.HandleRequest();
@@ -270,106 +231,34 @@ namespace IdentityServer
 
                             if (!result.Succeeded)
                             {
-                                logger.LogWarning("Windows authentication failed for authorization request from {RemoteIp}: {Failure}. No token claims were built. Check the credentials and Windows authentication configuration on the host.",
+                                logger.LogWarning("Negotiate authentication failed for authorization request from {RemoteIp}: {Failure}. No token claims were built. Check the credentials and authentication configuration on the host.",
                                     request.HttpContext.Connection.RemoteIpAddress,
                                     result.Failure?.Message ?? "(no details)");
-                                context.Reject(error: Errors.AccessDenied, description: "Windows authentication failed.");
+                                context.Reject(error: Errors.AccessDenied, description: "Authentication failed.");
                                 return;
                             }
 
-                            stage = "reading the Windows account identity";
-                            ClaimsIdentity identity = new ClaimsIdentity(TokenValidationParameters.DefaultAuthenticationType);
-                            WindowsIdentity wi = result.Principal?.Identity as WindowsIdentity
-                                ?? throw new InvalidOperationException("Negotiate did not produce a Windows identity.");
-
-                            // Account type is independent of logon type: manually entered browser
-                            // credentials can produce a network token without the Local logon SID.
-                            bool isLocal = wi.HasClaim(ClaimTypes.GroupSid, "S-1-5-113");
-
-                            winAccountName = wi.FindFirst(ClaimTypes.Name)!.Value;
-                            // The SID (Windows security identifier) survives an account rename, unlike
-                            // its display/logon name, so it is the token's stable subject identifier.
-                            string primarySid = wi.FindFirst(ClaimTypes.PrimarySid)!.Value;
-                            string samName    = winAccountName.Contains('\\') ? winAccountName.Split('\\')[1] : winAccountName;
-
-                            logger.LogDebug("Building claims for {User} (local: {IsLocal}, scopes: {Scopes})",
-                                winAccountName, isLocal, string.Join(" ", context.Request.GetScopes()));
-
-                            if (isLocal)
+                            var identityOptions = request.HttpContext.RequestServices.GetRequiredService<IdentityProviderOptions>();
+                            if (!identityOptions.Allows(result.Principal))
                             {
-                                stage = "building local-account claims";
-                                logger.LogDebug("Using local Windows account claims for {User}; Active Directory lookup is skipped, so directory profile fields and group roles are unavailable.", winAccountName);
-                                if (context.Request.HasScope(Scopes.OpenId))
-                                {
-                                    identity.AddClaim(Claims.Subject, primarySid);
-                                    identity.AddClaim(ClaimTypes.Name, samName);
-                                }
-
-                                if (context.Request.HasScope(Scopes.Profile))
-                                {
-                                    identity.AddClaim(ClaimTypes.WindowsAccountName, winAccountName);
-                                }
-
-                                if (context.Request.HasScope(Scopes.Email))
-                                {
-                                    // A local account has no directory email. This compatibility value
-                                    // is a placeholder, not a verified or deliverable mailbox.
-                                    identity.AddClaim(ClaimTypes.Email, samName + "@localhost");
-                                }
+                                logger.LogWarning("Authorization rejected: Kerberos is required but the authenticated identity reports {AuthenticationType}.", result.Principal?.Identity?.AuthenticationType);
+                                context.Reject(error: Errors.AccessDenied, description: "Kerberos authentication is required.");
+                                return;
                             }
-                            else
-                            {
-                                // No impersonation occurs here: these reads use the server process
-                                // account. Successful browser sign-in does not prove that account can
-                                // reach the domain controller or read the user's directory attributes.
-                                stage = "reading the Active Directory profile";
-                                logger.LogDebug("Reading Active Directory profile for {User} using the server process account; Windows authentication has already succeeded.", winAccountName);
-                                using ADUser user = new ADUser(winAccountName);
 
-                                if (context.Request.HasScope(Scopes.OpenId))
-                                {
-                                    identity.AddClaim(Claims.Subject, primarySid);
-                                    identity.AddClaim(ClaimTypes.Name, user.DisplayName);
-                                }
-
-                                if (context.Request.HasScope(Scopes.Email))
-                                {
-                                    // Preserve the existing placeholder when mail is absent; do not
-                                    // interpret an @localhost address as a verified email address.
-                                    identity.AddClaim(ClaimTypes.Email, !string.IsNullOrEmpty(user.Email) ? user.Email : user.Username + "@localhost");
-                                }
-
-                                if (context.Request.HasScope(Scopes.Profile))
-                                {
-                                    identity.AddClaim(ClaimTypes.WindowsAccountName, winAccountName);
-                                    if (!string.IsNullOrEmpty(user.GivenName)) { identity.AddClaim(ClaimTypes.GivenName, user.GivenName); }
-                                    if (!string.IsNullOrEmpty(user.Surname)) { identity.AddClaim(ClaimTypes.Surname, user.Surname); }
-                                    if (!string.IsNullOrEmpty(user.TelephoneNumber)) { identity.AddClaim(ClaimTypes.HomePhone, user.TelephoneNumber); }
-                                }
-
-                                if (context.Request.HasScope(Scopes.Roles))
-                                {
-                                    stage = "reading Active Directory groups and applying IdentityServer:Groups";
-                                    // Only direct memberships are read; nested groups are not expanded.
-                                    // The allowlist limits both exposed group names and token size. Regex
-                                    // patterns are not shell wildcards: ^MyApp .*$ means "starts with MyApp ".
-                                    var groups = user.GroupsCommonName;
-                                    foreach (string group in groups)
-                                    {
-                                        if (validGroupPatterns.Value.Any(rx => rx.IsMatch(group)))
-                                        {
-                                            identity.AddClaim(ClaimTypes.Role, group);
-                                        }
-                                    }
-                                    var matchedRoles = identity.FindAll(ClaimTypes.Role).ToList();
-                                    int roleCharCount = matchedRoles.Sum(c => c.Value.Length);
-                                    logger.LogDebug("User {User} has {Total} direct AD groups; {Matched} matched IdentityServer:Groups ({Chars} role-name characters). Only matching groups become roles; check the patterns and direct memberships if expected roles are missing.",
-                                        winAccountName, groups.Count, matchedRoles.Count, roleCharCount);
-                                    if (roleCharCount > 4096)
-                                        logger.LogWarning("User {User} has {Chars} characters of role claims; this is a size estimate before token encoding. Large tokens can exceed an application's request-header limit (HTTP 431). Narrow IdentityServer:Groups to roles the applications need.",
-                                            winAccountName, roleCharCount);
-                                }
-                            }
+                            winAccountName = result.Principal!.Identity!.Name;
+                            stage = "reading the directory profile";
+                            logger.LogDebug("Reading directory profile for {User} using {Provider}. Browser authentication has succeeded; directory access uses the configured server credentials.", winAccountName, identityOptions.Provider);
+                            var profiles = request.HttpContext.RequestServices.GetRequiredService<IUserProfileProvider>();
+                            var user = profiles.GetProfile(result.Principal, context.Request.HasScope(Scopes.Roles));
+                            stage = "building scoped claims and applying group patterns";
+                            ClaimsIdentity identity = ProfileClaims.Create(user, context.Request.GetScopes(), validGroupPatterns.Value);
+                            int matched = identity.FindAll(ClaimTypes.Role).Count();
+                            int roleChars = identity.FindAll(ClaimTypes.Role).Sum(c => c.Value.Length);
+                            logger.LogDebug("Built claims for {User} using {Provider} (local: {IsLocal}); {Total} direct groups, {Matched} matched IdentityServer:Groups.",
+                                winAccountName, identityOptions.Provider, user.IsLocal, user.Groups.Count, matched);
+                            if (roleChars > 4096)
+                                logger.LogWarning("User {User} has {Chars} characters of role claims. Narrow IdentityServer:Groups if tokens exceed application header limits.", winAccountName, roleChars);
 
                             stage = "preparing token claims";
                             // Scopes above decide which facts to include. Destinations decide where
@@ -384,11 +273,11 @@ namespace IdentityServer
 
                             context.Principal = new ClaimsPrincipal(identity);
                             logger.LogInformation("Authorization claims prepared for {User} via {AuthType} for client '{ClientId}'; OpenIddict will now build the protocol response.",
-                                winAccountName, wi.AuthenticationType, context.Request.ClientId);
+                                winAccountName, result.Principal.Identity.AuthenticationType, context.Request.ClientId);
                         }
                         catch (Exception ex)
                         {
-                            logger.LogError(ex, "Error building authorization claims for user '{User}' during {Stage}; returning server_error. If the exception reports a directory failure, check domain connectivity and read permissions for the server process account.",
+                            logger.LogError(ex, "Error building authorization claims for user '{User}' during {Stage}; returning server_error. For a directory failure, check realm mapping, connectivity, certificate trust and the configured directory credentials.",
                                 winAccountName ?? "(unknown)", stage);
                             context.Reject(error: Errors.ServerError, description: "An internal error occurred while processing the authorization request.");
                         }

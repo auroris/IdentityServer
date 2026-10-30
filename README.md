@@ -1,6 +1,8 @@
 # IdentityServer
 
-An OpenID Connect (OIDC) server using Windows Integrated Authentication, built on ASP.NET Core and [OpenIddict](https://documentation.openiddict.com/). It issues tokens for Windows accounts and reads profile details and group memberships from Active Directory (AD) for domain users.
+An OpenID Connect (OIDC) server using Negotiate/Kerberos authentication, built on ASP.NET Core and [OpenIddict](https://documentation.openiddict.com/). It reads profile details and direct group memberships from Active Directory (AD), Samba AD or FreeIPA.
+
+**Existing Windows installations need no new settings.** Automatic domain discovery, process-account directory access and local Windows accounts remain the default. Linux and explicit directory connections use the [authentication and directory settings](#authentication-and-directory-providers).
 
 Run it standalone or embed its core library in your own ASP.NET Core application. The shared Active Directory library can also be used independently.
 
@@ -18,6 +20,7 @@ Run it standalone or embed its core library in your own ASP.NET Core application
   - [Checking a deployment](#checking-a-deployment)
   - [How authentication is wired](#how-authentication-is-wired)
 - [Configuration](#configuration)
+  - [Authentication and directory providers](#authentication-and-directory-providers)
   - [Example appsettings.json](#example-appsettingsjson)
   - [Configuration keys](#configuration-keys)
     - [Serilog:MinimumLevel](#serilogminimumlevel)
@@ -100,9 +103,9 @@ This project bridges Windows sign-in and OIDC without a separate user database. 
 
 ## Prerequisites
 
-- Windows compatible with .NET 10. This implementation depends on Windows identities, DPAPI and Windows-only directory APIs.
+- Windows or Linux compatible with .NET 10. Windows defaults need no new settings; Linux requires the [Kerberos/LDAP setup](docs/kerberos-and-ldap.md). The standalone `ActiveDirectory` wrapper library remains Windows-only.
 - .NET 10 SDK for building; ASP.NET Core 10 runtime for Kestrel deployment, or the .NET 10 Hosting Bundle for IIS.
-- For domain sign-in, a domain-joined server with directory read access under its process account.
+- For default Windows domain sign-in, a domain-joined server with directory read access under its process account. Portable LDAP providers use explicit directory settings and process credentials or a dedicated read account.
 - Browser intranet/trust settings permitting automatic Windows authentication to the server's hostname.
 
 The Negotiate handler uses Kerberos or NTLM. Kerberos requires an appropriate SPN (Service Principal Name); its ownership depends on the hosting setup. See [Troubleshooting](#troubleshooting) and [Microsoft's Windows authentication guide](https://learn.microsoft.com/en-us/aspnet/core/security/authentication/windowsauth?view=aspnetcore-10.0) before changing SPN registration.
@@ -180,6 +183,36 @@ Protocol requests and application routes are handled at different points in the 
 Negotiate can retain authentication state on a connection. A proxy in front of Kestrel Negotiate must maintain one-to-one connection affinity; forwarded headers alone do not address this. See the [Kestrel Windows authentication guidance](https://learn.microsoft.com/en-us/aspnet/core/security/authentication/windowsauth?view=aspnetcore-10.0#kestrel).
 
 ## Configuration
+
+### Authentication and directory providers
+
+`IdentityServer:Authentication:Mode` accepts `Auto` (default), `Negotiate`, or `Kerberos`. `IdentityServer:Directory:Provider` accepts `Auto` (default), `Windows`, `ActiveDirectory`, `SambaAd`, or `FreeIpa` (case-insensitive).
+
+| Setup | Authentication selected by Auto | Directory lookup |
+|---|---|---|
+| Windows, no new settings | Negotiate, including existing NTLM/local accounts | Windows automatic discovery |
+| Windows, explicit AD/Samba LDAP settings | Negotiate | Portable LDAP with AD schema |
+| Linux, AD/Samba LDAP settings | Kerberos required | Portable LDAP with AD schema |
+| FreeIPA on either OS | Kerberos required | Portable LDAP with FreeIPA schema |
+
+An explicit `Kerberos` mode rejects NTLM and identities whose actual protocol cannot be established. Both modes use the standard HTTP Negotiate exchange. For directory `Auto`, Windows without `Directory:Server` uses the Windows provider; otherwise Auto selects portable AD. FreeIPA must be selected explicitly. Invalid/incomplete settings fail at startup, and failed authentication never switches providers. Restart after changing provider settings.
+
+For example, merge this into deployment settings for FreeIPA:
+
+```json
+{
+  "IdentityServer": {
+    "Directory": {
+      "Provider": "FreeIpa",
+      "Server": "ldaps://ipa.example.com",
+      "Realm": "EXAMPLE.COM",
+      "BaseDn": "dc=example,dc=com"
+    }
+  }
+}
+```
+
+Use `SambaAd` or `ActiveDirectory` with the appropriate server/realm/base for those directories. See [Kerberos and LDAP deployment](docs/kerberos-and-ldap.md) for bind credentials, certificates, service principals/keytabs, Linux hosting and validation. Configuring a provider does not provision a Kerberos environment.
 
 Settings are read in this order, with later sources overriding earlier values for the same key:
 
@@ -288,11 +321,13 @@ Controls whether the server reuses its token keys after a restart. The **signing
 - `false` (default): startup generates new keys. Outstanding codes can no longer be decrypted after a restart; existing tokens may fail validation as clients refresh cached signing keys. Some clients may continue accepting a signed token while its old public key remains cached, so a restart is not a reliable immediate revocation mechanism.
 - `true`: load the existing files under `DataPath`, or create them if missing. Reusing keys prevents this restart-related disruption; tokens still expire according to their lifetimes.
 
-The files are encrypted using **DPAPI**, Windows' Data Protection API, with machine scope. They are tied to that Windows machine, not just to a named account. File permissions must still restrict who can read them. Copying the files to another server or sharing their folder across servers does not provide a working multi-server key setup.
+On Windows, without `IdentityServer:KeyProtectionPassword`, files continue to use **DPAPI** with machine scope. Existing `.bin` files remain compatible and tied to that Windows machine. Restrict file permissions to the service account and administrators; copying them does not migrate the keys.
+
+With `IdentityServer:KeyProtectionPassword`, both operating systems use password-encrypted PKCS#8 `.pem` files. Linux requires this setting when persistence is enabled. Supply a strong password through a deployment secret such as `IdentityServer__KeyProtectionPassword`, separate from the key directory, and retain it across restarts. Wrong passwords or damaged files fail without replacing keys. Switching protection formats or changing the password requires deliberate migration/re-encryption; the application refuses to silently replace a key found only in the other format. See [persistent keys](docs/kerberos-and-ldap.md#persistent-token-keys).
 
 #### IdentityServer:DataPath
 
-Used only when `PersistKeys` is `true`. It contains `signing-key.bin` and `encryption-key.bin`. The default is a `keys` folder under the application's base directory. An absolute path outside the deployment folder makes it easier to replace application files without deleting the keys.
+Used only when `PersistKeys` is `true`. It contains `signing-key.bin` and `encryption-key.bin` for DPAPI, or `signing-key.pem` and `encryption-key.pem` with `KeyProtectionPassword`. The default is a `keys` folder under the application's base directory. An absolute path outside the deployment folder makes it easier to replace application files without deleting the keys.
 
 For example, merge this into the settings and grant the server process account read/write access to that folder:
 
@@ -390,10 +425,10 @@ Include `openid` for sign-in: this implementation adds the required **subject** 
 
 | Scope | Claims |
 |---|---|
-| `openid` | `sub` (Windows SID, a security identifier that survives an account rename), `name` |
-| `profile` | `windowsaccountname`; plus `givenname`, `surname`, `homephone` when available from Active Directory |
-| `email` | `email` (from AD `mail` attribute, falling back to `username@localhost`) |
-| `roles` | `role` (one per AD group matching `IdentityServer:Groups`) |
+| `openid` | `sub` (Windows/AD/Samba SID or FreeIPA `ipaUniqueID`), `name` |
+| `profile` | `windowsaccountname` (account name, including the Kerberos principal for FreeIPA); plus `givenname`, `surname`, `homephone` when available |
+| `email` | `email` (from directory `mail`, falling back to `username@localhost`) |
+| `roles` | `role` (one per direct directory group matching `IdentityServer:Groups`) |
 
 For a local machine account, the available claims are `sub`, the account name without its machine prefix, the Windows account name and a placeholder email, according to the requested scopes. There are no AD profile fields or group roles. A `username@localhost` email is a compatibility placeholder, not proof of a deliverable or verified mailbox.
 
@@ -495,7 +530,7 @@ Scope searches with an LDAP root such as `LDAP://OU=People,DC=example,DC=com`, u
 
 `Find<T>(howMany)` caps results; `PageSize` enables paging beyond the domain controller's unpaged limit. Sorting a capped result sorts only that subset. `PropertiesToSearch` ORs its entries; `AdditionalFilter` accepts trusted raw LDAP and must not contain unescaped input.
 
-Both libraries target .NET 10; AD access requires Windows. To reference only the wrappers, add:
+Both libraries target .NET 10. The `ActiveDirectory` wrappers still require Windows; IdentityServer's portable LDAP providers use `System.DirectoryServices.Protocols` separately. The core project keeps platform-compatibility analysis enabled and guards its Windows provider. To reference only the wrappers, add:
 
 ```xml
 <PropertyGroup>
@@ -514,7 +549,7 @@ Run the automated checks from the repository folder:
 dotnet test IdentityServer.sln
 ```
 
-Host tests cover anonymous discovery, configuration isolation and route handling without a domain. Live-directory tests make read-only queries as the test process account and skip when no domain is reachable. They do not verify a different deployment account's permissions.
+Host tests cover anonymous discovery, configuration isolation, route handling and authorization-code/PKCE/token flows with simulated identities and profiles. Provider tests check defaults, realm boundaries, LDAP mapping, scoped claims and key persistence. Windows live-directory tests skip when no domain is reachable; portable live-LDAP tests are opt-in. See [deployment verification](docs/kerberos-and-ldap.md#verification) for live-test configuration and the remaining Kerberos/browser checks.
 
 Select live tests with `dotnet test IdentityServer.sln --filter Category=LiveDirectory`, or omit them with `--filter "Category!=LiveDirectory"`. Tests use xUnit with the VSTest adapter for CLI and Visual Studio support.
 
@@ -616,8 +651,8 @@ Use the stages below to locate where sign-in stopped:
 |---|---|
 | `Authorization request rejected` | The application ID or return destination was not accepted. Check `IdentityServer:Clients` or `IdentityServer:Hosts`, as named in the message. A Windows password change will not fix application configuration. Redirect rejection logs include the host, not the full callback URL or query string. |
 | `Issuing Negotiate challenge` | The server is asking the browser to prove the Windows identity. An initial HTTP 401 is normal. If the exchange repeats without progressing, check browser trust, client support for Windows authentication and the offered credentials. |
-| `Reading Active Directory profile` | Windows sign-in has succeeded; the server is now fetching profile data using its own process account. A failure here points to a separate directory lookup, so check the exception, domain connectivity and the process account's read access. Local Windows accounts skip this step and have fewer claims. |
-| Direct AD group counts and pattern matches | Only direct group memberships matching `IdentityServer:Groups` become role claims, and only when `roles` was requested. Nested memberships are not expanded. Zero matches can be a valid result. |
+| `Reading directory profile` | Browser sign-in has succeeded. Check the selected provider, realm mapping, directory connectivity, TLS trust and process/bind credentials if profile lookup fails. The Windows provider skips AD for local accounts. |
+| Direct group counts and pattern matches | Only direct group memberships matching `IdentityServer:Groups` become role claims, and only when `roles` was requested. Nested memberships are not expanded. Zero matches can be a valid result. |
 | `Authorization claims prepared` | Identity lookup and claim preparation succeeded. OpenIddict still has to build the protocol response; this message does not prove that the application has received or accepted a token. |
 | `Token request rejected` | In code flow, the application makes a separate call to exchange its code for tokens. The logged client ID/secret failure concerns the application's credentials, not the person's Windows password. |
 | `Token endpoint response sizes` | Lengths help diagnose oversized request headers without recording token credentials. Zero means that token was absent, not necessarily an error. This diagnostic covers `/connect/token`; implicit/hybrid tokens returned directly by `/connect/authorize` do not pass through it. |

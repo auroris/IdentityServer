@@ -86,6 +86,12 @@ internal sealed class IdentityServerFactory(string issuer, string clientId) : We
             ["IdentityServer:ServerUri"] = issuer,
             ["IdentityServer:Hosts:0"] = issuer,
             ["IdentityServer:Clients:0:ClientId"] = clientId,
+            // These tests need no directory connection. Explicit portable settings let them run
+            // on Linux too; Windows's configuration-free defaults have separate regression tests.
+            ["IdentityServer:Directory:Provider"] = "ActiveDirectory",
+            ["IdentityServer:Directory:Server"] = "ldaps://directory.example",
+            ["IdentityServer:Directory:BaseDn"] = "dc=example",
+            ["IdentityServer:Directory:Realm"] = "EXAMPLE",
         }));
         builder.ConfigureTestServices(services => services.AddTransient<IStartupFilter, ConnectionItemsStartupFilter>());
     }
