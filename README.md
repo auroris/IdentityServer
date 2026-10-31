@@ -1,9 +1,7 @@
 <h1 align="center">IdentityServer</h1>
 
 <p align="center">
-  Single sign-on for intranet applications, backed by the directory you already run.<br>
-  Browsers sign in with Kerberos and no password prompt; applications receive standard
-  OpenID Connect tokens carrying the person's directory profile and groups.
+   A lightweight OpenID Connect server using using the directory you already run, built on ASP.NET Core and OpenIddict. Run standalone or embed in your application.
 </p>
 
 <p align="center">
