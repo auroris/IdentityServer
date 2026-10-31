@@ -1,8 +1,8 @@
 # Running IdentityServer on Linux
 
-This guide takes a Linux host from package installation to a verified browser sign-in against Microsoft AD, Samba AD or FreeIPA. It uses Ubuntu 26.04, systemd and a dedicated LDAP read account as the concrete installation path. Other distributions need equivalent packages and service/file permissions. No database or custom directory schema is required.
+This guide takes a Linux host from a fresh install to a verified browser sign-in against Microsoft AD, Samba AD or FreeIPA. The commands are for Ubuntu 26.04 with systemd and use a dedicated LDAP read account; other distributions need the equivalent packages and the same file permissions. There is no database to set up and nothing to add to the directory schema.
 
-The [2026-10-31 validation record](validation-2026-10-31.md) describes the configurations exercised against real directories. The [provider reference](kerberos-and-ldap.md) documents option semantics; the [proxy guide](apache-and-nginx.md) explains forwarded identities and application paths.
+Before you start, skim [How it works](how-it-works.md) for the three credentials involved. The [directory reference](kerberos-and-ldap.md) explains each setting, the [proxy guide](apache-and-nginx.md) covers Apache and Nginx in depth, and the [validation record](validation-2026-10-31.md) lists the versions this guide was tested against.
 
 ## Contents
 
@@ -319,7 +319,7 @@ Fill both native environment entries with nonempty values: `IdentityServer__Dire
 
 The environment file is read by systemd as root, not sourced by a shell: use literal `NAME=value` entries, no `export` or command substitution. Quote values containing whitespace using systemd's [EnvironmentFile syntax](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html#EnvironmentFile=). Keep it root-owned mode 0600; the application does not need direct file access. Preserve the key-protection password with the saved signing/encryption keys across restarts and deployments.
 
-Replace the example client, callback host and hostname restrictions. `IdentityServer:Hosts` accepts callback origins, but its redirect check matches **hostnames**, not exact callback paths, and is shared across clients. `AllowedHosts` restricts requests to the identity hostname. Configure the actual callback URL in the client. Keep an explicit `Clients` list; an absent list or wildcard allows unmatched client IDs. See the [configuration reference](../README.md#configuration-keys).
+Replace the example client, callback host and hostname restrictions. `IdentityServer:Hosts` accepts callback origins, but its redirect check matches **hostnames**, not exact callback paths, and is shared across clients. `AllowedHosts` restricts requests to the identity hostname. Configure the actual callback URL in the client. Keep an explicit `Clients` list; an absent list or wildcard allows unmatched client IDs. See the [configuration guide](configuration.md).
 
 `Groups: []` deliberately emits no roles. Add narrow common-name regexes such as `^MyApp Readers$` or `^myapp-readers$`, and have the client request `roles`. Only direct memberships are read: nested groups, AD primary-group membership and arbitrary proxy-provided roles are not expanded/copied. AD/Samba subjects are SIDs; FreeIPA subjects are `ipaUniqueID` values.
 
@@ -382,11 +382,11 @@ Use a client/relying party with these settings:
 | Response type / PKCE | `code` / `S256` |
 | Scopes | `openid profile email roles` (omit unused scopes) |
 
-For a proxy, substitute its authority including `/IdentityServer`. The client should generate/check state and nonce, retain the PKCE verifier, exchange the authorization code without browser Kerberos credentials, and validate token signatures, issuer and audience. Use your own test client; if following the [OIDC debugger walkthrough](../README.md#testing-with-oidcdebuggercom), explicitly configure its client/callback host and understand that directory claims are returned to that external site.
+For a proxy, substitute its authority including `/IdentityServer`. The client should generate/check state and nonce, retain the PKCE verifier, exchange the authorization code without browser Kerberos credentials, and validate token signatures, issuer and audience. Use your own test client; if following the [OIDC debugger walkthrough](verification.md#checking-a-sign-in-with-oidcdebuggercom), explicitly configure its client/callback host and understand that directory claims are returned to that external site.
 
 Sign in as two different users in separate OS/cache/browser sessions. Confirm each subject, email and allowed direct groups; include a nested-only group that must be absent. Repeat from a session with no ticket: authorization must challenge/fail and produce no successful token result. Discovery succeeding or an initial HTTP 401 is not a complete SSO test. Check both successful authorization and server-side code redemption.
 
-For opt-in LDAP automation, see [the live integration-test configuration](kerberos-and-ldap.md#verification). Those tests read real directory profiles but do not replace this browser check.
+For opt-in LDAP automation, see [the live directory test](verification.md#live-directory-tests). Those tests read real directory profiles but do not replace this browser check.
 
 ## Optional: Kerberos credentials for outbound LDAP
 

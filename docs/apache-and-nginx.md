@@ -1,12 +1,17 @@
 # Apache and Nginx hosting
 
-The Linux hosting arrangement is a separate Kestrel process, supervised by systemd, behind Apache or Nginx. On Windows, IIS supplies its own authentication and application path.
+On Linux you can put Apache or Nginx in front of IdentityServer and let the proxy do the Kerberos handshake. The proxy terminates HTTPS, authenticates the browser, and passes the verified principal to a Kestrel process listening on loopback. IdentityServer then reads the directory and issues the tokens as usual. This is the `ProxyKerberos` authentication mode.
 
-Start with the [Linux deployment guide](linux-deployment.md) for package installation, keytab provisioning, LDAP/HTTPS trust, accounts and file permissions. This page describes the proxy-specific behavior and templates. See the [live validation record](validation-2026-10-31.md) for the tested provider/hosting matrix and fixes.
+Why a proxy rather than plain forwarding: a Negotiate exchange is tied to one TCP connection, and an ordinary reverse proxy pools backend connections, which breaks it. Authenticating at the proxy sidesteps the problem and gives you the proxy's usual TLS, logging and routing features.
 
-The supplied examples use **ProxyKerberos**: the front server authenticates the browser with Kerberos and forwards the full principal to IdentityServer over an authenticated, restricted backend connection. IdentityServer then reads the selected LDAP directory and issues OIDC tokens. This avoids passing a connection-bound Negotiate exchange through a generic backend connection pool.
+This page covers the proxy templates, how the backend decides to trust the proxy, and paths and prefixes. The [Linux guide](linux-deployment.md) covers everything around it: packages, keytabs, certificates, the service account and systemd. The [validation record](validation-2026-10-31.md) lists the proxy and directory versions this was tested with.
 
-Apache requires **mod_auth_gssapi**. Nginx requires the **SPNEGO authentication module**, available in distributions such as Debian/Ubuntu as `libnginx-mod-http-auth-spnego`; it is not part of stock Nginx. Both examples disable password/Basic fallback and preserve the principal's realm. See the [Apache module](https://github.com/gssapi/mod_auth_gssapi) and [Nginx module](https://github.com/stnoonan/spnego-http-auth-nginx-module) documentation. Forwarding native Kestrel Negotiate requires a proxy with the [connection affinity Microsoft specifies](https://learn.microsoft.com/en-us/aspnet/core/security/authentication/windowsauth?view=aspnetcore-10.0#kestrel); ordinary keepalive or IP stickiness is insufficient. These templates use proxy authentication instead.
+You need one of these modules:
+
+- **Apache:** [mod_auth_gssapi](https://github.com/gssapi/mod_auth_gssapi), packaged on Debian and Ubuntu as `libapache2-mod-auth-gssapi`.
+- **Nginx:** the [SPNEGO authentication module](https://github.com/stnoonan/spnego-http-auth-nginx-module), packaged as `libnginx-mod-http-auth-spnego`. It is not part of stock Nginx.
+
+Both templates disable Basic-authentication fallback and keep the principal's realm, so the backend receives `user@REALM`.
 
 ## Deployment files
 
@@ -114,7 +119,7 @@ Before enabling a real deployment:
 3. From a client with a Kerberos ticket and browser trust for the public hostname, complete authorization-code/PKCE sign-in with a registered application. Confirm the directory subject and allowed roles. Discovery succeeding alone does not demonstrate Kerberos authentication.
 4. Attempt requests with caller-supplied identity/forwarding headers and no Kerberos authentication. The proxy must challenge authorization requests and must clear identity headers on anonymous paths. Direct backend requests with a missing/wrong secret must not authenticate.
 5. Test two different users sequentially over reused connections; no identity may carry over. Confirm token redemption needs only client/code credentials, and unknown/root paths do not expose a second copy of prefixed protocol endpoints.
-6. Restart IdentityServer and verify saved-key continuity, then check service/proxy logs without exposing secrets. For Windows/IIS deployments, also run the [IIS verification checks](../README.md#hosting-in-iis).
+6. Restart IdentityServer and verify saved-key continuity, then check service/proxy logs without exposing secrets. For Windows/IIS deployments, also run the [Windows and IIS checks](windows-iis.md#check-the-deployment).
 
 Proxy template syntax, module behavior, live Kerberos and LDAP interoperability require the actual Apache/Nginx environment. Passing the in-process tests or publishing Linux binaries does not substitute for those deployment checks.
 
