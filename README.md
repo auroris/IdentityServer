@@ -16,8 +16,8 @@
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Browser
     participant App as Your application
+    participant Browser
     participant IdS as IdentityServer
     participant Dir as Directory<br>(AD / Samba AD / FreeIPA)
     Browser->>App: Open a protected page
@@ -29,8 +29,9 @@ sequenceDiagram
     Dir-->>IdS: Attributes
     IdS-->>Browser: Redirect to callback with a code
     Browser->>App: Callback with code
-    App->>IdS: POST /connect/token (code + PKCE)
-    IdS-->>App: ID token and access token
+    Note over App,IdS: Back channel, no browser involved:<br>10. POST /connect/token with the code and PKCE verifier<br>11. ID token and access token
+    App->>IdS: #8203;
+    IdS-->>App: #8203;
 ```
 
 ## What it is
