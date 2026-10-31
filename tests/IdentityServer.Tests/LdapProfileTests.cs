@@ -14,7 +14,16 @@ public sealed class LdapProfileTests
     {
         var options = IdentityProviderOptions.Read(LdapConfiguration());
         var provider = new LdapUserProfileProvider(options, () => throw new Exception("LDAP must not be opened"));
-        Assert.Throws<InvalidOperationException>(() => provider.GetProfile(Principal(name), true));
+        Assert.Throws<DirectoryIdentityException>(() => provider.GetProfile(Principal(name), true));
+    }
+
+    [Fact]
+    public void RealmMismatch_IsAPolicyRejection()
+    {
+        var provider = new LdapUserProfileProvider(IdentityProviderOptions.Read(LdapConfiguration("ActiveDirectory")),
+            () => throw new Exception("LDAP must not be opened"));
+        var error = Assert.Throws<DirectoryIdentityException>(() => provider.GetProfile(Principal("alice@OTHER.COM"), true));
+        Assert.Contains("IdentityServer:Directory:Realm", error.Message);
     }
 
     [Fact]
@@ -79,9 +88,18 @@ public sealed class LdapProfileTests
     {
         var ldap = new FakeLdap(Enumerable.Repeat(IpaUser(), count).ToArray(), []);
         var provider = new LdapUserProfileProvider(IdentityProviderOptions.Read(LdapConfiguration()), () => ldap);
-        Assert.Throws<InvalidOperationException>(() => provider.GetProfile(Principal(), true));
+        var error = Assert.Throws<DirectoryIdentityException>(() => provider.GetProfile(Principal(), true));
+        Assert.Contains("exactly one", error.Message);
         Assert.Single(ldap.Filters);
         Assert.True(ldap.Disposed);
+    }
+
+    [Fact]
+    public void MissingStableIdentifier_IsAPolicyRejection()
+    {
+        var ldap = new FakeLdap([new("uid=alice,cn=users,cn=accounts,dc=example,dc=com", new Dictionary<string, object[]> { ["uid"] = ["alice"] })], []);
+        var provider = new LdapUserProfileProvider(IdentityProviderOptions.Read(LdapConfiguration()), () => ldap);
+        Assert.Contains("ipaUniqueID", Assert.Throws<DirectoryIdentityException>(() => provider.GetProfile(Principal(), true)).Message);
     }
 
     [Fact]

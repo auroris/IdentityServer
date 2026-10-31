@@ -2,6 +2,8 @@
 
 Windows defaults to automatic domain discovery and process-account directory access. Select an explicit directory provider to use AD, Samba AD or FreeIPA through portable LDAP, including on Linux. Authentication verifies the person through the operating system's Negotiate/Kerberos handler or an explicitly configured Kerberos-authenticating proxy; directory lookup runs separately with the server's credentials. No user passwords are collected by IdentityServer.
 
+For installation commands from an empty Linux host through browser sign-in, follow [Running IdentityServer on Linux](linux-deployment.md). This page is the provider/configuration reference. The [2026-10-31 validation record](validation-2026-10-31.md) documents live AD, Samba, FreeIPA and browser results and the fixes they produced.
+
 ## Selection and configuration
 
 `IdentityServer:Authentication:Mode` is `Auto`, `Negotiate`, `Kerberos` or explicit `ProxyKerberos`. Auto selects Negotiate on Windows, except with FreeIPA, and requires Kerberos on Linux. Explicit Kerberos mode rejects identities reporting NTLM or an unknown protocol. It applies to token issuance and default protected application routes, including identities supplied by IIS. Anonymous endpoints and routes naming their own authentication schemes are exempt from the default route policy. Hosts must expose the actual protocol: a generic `Negotiate` label is insufficient proof of Kerberos. ProxyKerberos uses a Kerberos-authenticating Apache/Nginx front server with separate trust settings; see [Apache and Nginx hosting](apache-and-nginx.md). Auto never accepts forwarded identity headers.
@@ -42,7 +44,7 @@ These examples configure the directory provider. Configure host, client, redirec
 
 | Key under `IdentityServer:Directory` | Meaning |
 |---|---|
-| `Server` | Required `ldaps://host[:port]` (TLS, default 636) or `ldap://host[:port]` (mandatory StartTLS, default 389). Plaintext binds are not supported. |
+| `Server` | Required `ldaps://host[:port]` (TLS, default 636) or `ldap://host[:port]` (mandatory StartTLS, default 389). Credentials are never sent before TLS. |
 | `Realm` | Required accepted Kerberos realm, for example `EXAMPLE.COM`. Checked before name-based account lookup. |
 | `BaseDn` | Required directory suffix/search root. Referrals are disabled. |
 | `UserBaseDn` | Optional search root. Defaults to `BaseDn` for AD/Samba, or `cn=users,cn=accounts,<BaseDn>` for FreeIPA. |
@@ -51,9 +53,15 @@ These examples configure the directory provider. Configure host, client, redirec
 | `BindDn`, `BindPassword` | Set both for a dedicated read account over TLS, or neither for process credentials. The name may be a bind DN or an AD-supported bind name. Supply the password through `IdentityServer__Directory__BindPassword` or another deployment secret source. |
 | `TimeoutSeconds` | Per LDAP request timeout, default 10, allowed 1–120 seconds. |
 
+Surrounding whitespace is trimmed from `Server`, `Realm`, `NetbiosDomain` and the DN settings. `BindPassword` is used exactly as supplied.
+
 Without explicit bind credentials, LDAP uses integrated authentication on Windows and GSSAPI/Kerberos from the process credential cache on Linux. The HTTP keytab does **not** populate that outbound LDAP cache. Arrange a service credential cache with renewal or configure a dedicated read account. Trust the LDAP CA in the operating system/OpenLDAP trust store; no certificate-validation bypass is provided. Do not use FreeIPA's Directory Manager account for application reads. See [FreeIPA LDAP guidance](https://www.freeipa.org/page/HowTo/LDAP.html).
 
-AD/Samba use the authenticated Windows SID when available. Otherwise they accept a principal in the configured realm and search UPN or SAM name; duplicate matches are rejected. FreeIPA matches `krbPrincipalName` and reads `uid` and `ipaUniqueID`. Unqualified usernames and unknown realms are rejected. Each host uses one directory/realm. FreeIPA identities must arrive as realm-qualified Kerberos principals.
+On Linux, StartTLS first opens an anonymous LDAP session to initialize the .NET connection, then upgrades it to TLS before assigning or sending credentials. A failed upgrade closes the connection. Use LDAPS if the directory refuses even anonymous binds.
+
+For Linux GSSAPI binds to Samba over TLS, the tested OpenLDAP/SASL client required `LDAPSASL_CBINDING=tls-endpoint` for TLS channel binding and `LDAPSASL_SECPROPS=maxssf=0` to avoid adding a SASL signing/sealing layer inside TLS. Set these in the application's service environment when required by the directory; TLS encryption and certificate verification remain mandatory. These settings do not populate the Kerberos credential cache and are unnecessary for explicit `BindDn`/`BindPassword` authentication.
+
+AD/Samba use the authenticated Windows SID when available. Otherwise they accept a principal in the configured realm and search UPN or SAM name; duplicate matches are rejected. FreeIPA matches `krbPrincipalName` and reads `uid` and `ipaUniqueID`. Unqualified usernames and unknown realms are rejected. These policy rejections, and an account matching no user, more than one user, or lacking its SID/`ipaUniqueID`, return `access_denied` with a warning stating the reason; connection, TLS and bind failures return `server_error`. Each host uses one directory/realm. FreeIPA identities must arrive as realm-qualified Kerberos principals.
 
 Group queries use direct `member` relationships and page through results, then apply the `IdentityServer:Groups` regex allowlist to group common names. They do not expand nested groups, include the AD primary group, or copy roles supplied by the authentication handler. FreeIPA searches the accounts group container, rather than its separate role/permission containers.
 
@@ -62,6 +70,8 @@ AD/Samba use Windows SIDs as subjects; FreeIPA uses `ipaUniqueID`. Account ident
 ## Linux setup
 
 These steps use native Kestrel Kerberos. For Apache/Nginx, follow the [proxy deployment guide](apache-and-nginx.md), which places the HTTP keytab at the front server instead.
+
+The [complete Linux walkthrough](linux-deployment.md) expands these steps with package commands, provider-specific keytab provisioning, certificate/reader diagnostics, native and proxy templates, file permissions, systemd and browser verification. The [native settings](../deploy/appsettings.Kerberos.json) and [unit](../deploy/identityserver-native.service) provide a direct HTTPS deployment without needing to assemble the configuration from fragments.
 
 1. Install a supported ASP.NET Core 10 runtime, the distribution's Kerberos/GSSAPI libraries and tools, and OpenLDAP/SASL GSSAPI client libraries. Configure domain DNS, synchronized time, `/etc/krb5.conf`, and LDAP CA trust.
 2. Have the directory administrator provision an HTTP service principal for the **public hostname**, for example `HTTP/identity.example.com@EXAMPLE.COM`, and its keytab. Use FreeIPA's service/keytab tools or AD/Samba's domain tools as appropriate. Protect the keytab and set `KRB5_KTNAME` in the application's service environment. A domain/realm join can provision the host but is not performed by this application. See [Microsoft's Linux Kerberos setup](https://learn.microsoft.com/en-us/aspnet/core/security/authentication/windowsauth?view=aspnetcore-10.0#linux-and-macos-environment-configuration).
@@ -89,7 +99,7 @@ Before deploying each provider, check it against a real directory and client:
 1. Anonymous discovery succeeds, and unrecognized paths do not prompt for credentials.
 2. A browser completes Kerberos sign-in and authorization-code redemption through the public hostname.
 3. AD/Samba subjects match Windows SIDs; FreeIPA subjects match `ipaUniqueID`. Check name/email and allowed direct groups, including a user whose only path to a group is nested (that group must be absent).
-4. Unknown realms, missing/ambiguous accounts, and NTLM when Kerberos is required are rejected. A failed directory bind issues no tokens and does not change provider.
+4. Unknown realms, missing/ambiguous accounts, and NTLM when Kerberos is required are rejected with `access_denied`. A failed directory bind returns `server_error`, issues no tokens and does not change provider.
 5. LDAP rejects an untrusted certificate, and the configured read account has only the necessary directory access.
 6. With persistence enabled, an unexpired pre-restart authorization code can be redeemed after a restart. A wrong key password fails startup without modifying files.
 7. For Windows deployments, check local accounts and the configured IIS/Kestrel hosting mode.

@@ -13,6 +13,7 @@ Run it standalone or embed its core library in your own ASP.NET Core application
 - [Rationale](#rationale)
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
+  - [Hosting on Linux](#hosting-on-linux)
   - [Hosting with Kestrel](#hosting-with-kestrel)
   - [Hosting in IIS](#hosting-in-iis)
   - [Hosting behind Apache or Nginx](#hosting-behind-apache-or-nginx)
@@ -44,6 +45,8 @@ Run it standalone or embed its core library in your own ASP.NET Core application
 
 ## Quick start
 
+For a Linux installation, start with the [end-to-end Linux guide](docs/linux-deployment.md), including native Kestrel, Apache/Nginx, AD/Samba/FreeIPA and browser SSO checks. The quick check below uses Windows defaults.
+
 On Windows with the .NET 10 SDK installed, run from the repository root:
 
 ```powershell
@@ -70,7 +73,7 @@ The output includes dependencies, settings and an IIS `web.config`. It is framew
 
 ## How the pieces fit together
 
-Windows authenticates the user, while the server's process account reads AD and key files. Successful user authentication therefore does not prove the process account has the access needed to build claims.
+The operating system's Negotiate/Kerberos handler, or an explicitly trusted authenticating proxy, verifies the user. IdentityServer separately reads the directory and token-key files using its service credentials. Successful browser authentication therefore does not prove the service has the access needed to build claims.
 
 | Term | Meaning in this project |
 |---|---|
@@ -83,7 +86,7 @@ Windows authenticates the user, while the server's process account reads AD and 
 In the authorization code flow, the normal sequence is:
 
 1. The client sends the browser to IdentityServer's authorization endpoint.
-2. IdentityServer asks Windows to authenticate the person. A trusted browser can often do this without a password prompt.
+2. The configured authentication handler or proxy verifies the person with Negotiate/Kerberos. A trusted browser can often do this without a password prompt.
 3. IdentityServer reads the requested account details and returns an **authorization code**, a short-lived intermediate value, to the client's callback.
 4. The client exchanges that code at the token endpoint and validates the returned tokens. It can then establish its own application session.
 
@@ -91,21 +94,21 @@ The client application or API enforces its own access rules using the issued cla
 
 ## Rationale
 
-This project bridges Windows sign-in and OIDC without a separate user database. It generates token signing and encryption keys automatically; HTTPS certificates are configured separately by the host.
+This project bridges integrated directory sign-in and OIDC without a separate user database. It generates token signing and encryption keys automatically; HTTPS certificates are configured separately by the host.
 
 **Tradeoffs to be aware of:**
 
 - By default, keys are **ephemeral**: new keys are generated at startup. A restart can therefore disrupt existing tokens and outstanding codes. Enable [key persistence](#identityserverpersistkeys) to reuse keys on the same machine.
 - There is no refresh token flow; clients start sign-in again when they need fresh tokens.
 - The server uses OpenIddict's **degraded mode**, which means this application performs client checks and identity lookup without OpenIddict's database stores. It has no persistent token/revocation registry. Choose token lifetimes with that limitation in mind; retaining key files does not add token storage.
-- Intended for intranets with existing Windows accounts and directory access. Browser trust and domain connectivity are part of the setup.
+- Intended for intranets with existing AD, Samba AD or FreeIPA identities. Browser trust and directory/Kerberos connectivity are part of the setup.
 
 ## Prerequisites
 
-- Windows or Linux compatible with .NET 10. Windows defaults to automatic domain discovery and process-account directory access; Linux requires the [Kerberos/LDAP setup](docs/kerberos-and-ldap.md). The standalone `ActiveDirectory` wrapper library is Windows-only.
+- Windows or Linux compatible with .NET 10. Windows defaults to automatic domain discovery and process-account directory access; Linux requires the [Linux deployment setup](docs/linux-deployment.md). The standalone `ActiveDirectory` wrapper library is Windows-only.
 - .NET 10 SDK for building; ASP.NET Core 10 runtime for Kestrel deployment, or the .NET 10 Hosting Bundle for IIS.
 - For default Windows domain sign-in, a domain-joined server with directory read access under its process account. Portable LDAP providers use explicit directory settings and process credentials or a dedicated read account.
-- Browser intranet/trust settings permitting automatic Windows authentication to the server's hostname.
+- Browser intranet/trust settings permitting integrated authentication to the server's hostname.
 
 The Negotiate handler uses Kerberos or NTLM. Kerberos requires an appropriate SPN (Service Principal Name); its ownership depends on the hosting setup. See [Troubleshooting](#troubleshooting) and [Microsoft's Windows authentication guide](https://learn.microsoft.com/en-us/aspnet/core/security/authentication/windowsauth?view=aspnetcore-10.0) before changing SPN registration.
 
@@ -115,7 +118,15 @@ Publish as shown in [Quick start](#quick-start), then configure DNS and HTTPS fo
 
 Copy the publish output to the deployment folder and configure that deployment's settings. `appsettings.Local.json` is excluded from the standalone publish output, so create or deploy that file separately if you use it. Keep test clients and redirect hosts only where they are needed; [Hosts](#identityserverhosts) controls where sign-in results can be sent.
 
-The process account needs read/execute access to the application, read access to AD for domain sign-in, and write access to the log and persistent key directories. Choose one of the following hosts.
+The process account needs read/execute access to the application and write access to the log and persistent key directories. Directory lookups need read access under the configured process or bind credentials. Choose one of the following hosts.
+
+### Hosting on Linux
+
+Follow [Running IdentityServer on Linux](docs/linux-deployment.md) for packages, DNS/time, AD/Samba/FreeIPA service keytabs, LDAP/HTTPS trust, read-account configuration, publishing, systemd, browser SSO, upgrades and troubleshooting. It includes commands for native Kestrel and for either authenticating proxy.
+
+Use [appsettings.Kerberos.json](deploy/appsettings.Kerberos.json) with the [native systemd unit](deploy/identityserver-native.service) for direct HTTPS on port 8443, or the [proxy settings](deploy/appsettings.Proxy.json) and [proxy unit](deploy/identityserver.service) for a loopback backend. Install the selected template as the deployment's complete `appsettings.json`; it is not loaded automatically by its repository filename. Supply secrets separately and adapt all example domains, clients and certificate paths.
+
+The [Kerberos/LDAP reference](docs/kerberos-and-ldap.md) describes provider selection, identities and key persistence. The [dated validation record](docs/validation-2026-10-31.md) documents the live interoperability results and resulting fixes.
 
 ### Hosting with Kestrel
 
@@ -174,7 +185,7 @@ Select `Authentication:Mode: ProxyKerberos` for these examples: the front server
 |---|---|
 | Open `<public base URL>/.well-known/openid-configuration` without signing in | A JSON response shows that hosting and anonymous discovery work. No password prompt should be needed. |
 | Read the returned `issuer`, `authorization_endpoint` and `token_endpoint` | They should reflect the public address and any application path. An internal hostname, HTTP scheme or missing path points to hosting/proxy configuration. |
-| Run a sign-in request from a registered client with an allowed callback | This exercises Windows authentication, account lookup and return to the application, which discovery alone does not test. |
+| Run a sign-in request from a registered client with an allowed callback | This exercises browser authentication, account lookup and return to the application, which discovery alone does not test. |
 | Inspect the application's received claims | Requested fields and roles should match the account type, directory data and group patterns. Missing roles do not necessarily mean authentication failed. |
 | If persistence is enabled, verify the two key files are present under `DataPath` after startup | The process can create/read the persisted keys. Preserve these files during later deployments so a restart can reuse them. |
 
@@ -397,7 +408,7 @@ A missing or empty client list accepts arbitrary client IDs. A `ClientId` of `"*
 
 #### IdentityServer:Groups
 
-Case-insensitive .NET regular expressions selecting which AD groups become role claims. Applied only to domain accounts when the client requests `roles`; the receiving application decides what those roles permit.
+Case-insensitive .NET regular expressions selecting which directory groups become role claims. Applied to directory-backed identities when the client requests `roles`; the receiving application decides what those roles permit.
 
 ```json
 {
@@ -412,7 +423,7 @@ Case-insensitive .NET regular expressions selecting which AD groups become role 
 
 These patterns match exact names; `^MyApp .*$` would match all names starting with `MyApp `. Use regex syntax, not filename wildcards. Narrow patterns limit both exposed group information and token size.
 
-The code reads direct memberships and matches the group's **common name**, its name in AD rather than its full directory path. Nested memberships are not expanded. An empty list emits no roles. Changing a group or pattern affects newly issued claims; it does not rewrite tokens or application sessions that already exist. Restart after changing patterns because they are cached.
+The code reads direct memberships and matches the group's **common name**, its name in the selected directory rather than its full directory path. Nested memberships are not expanded. An empty list emits no roles. Changing a group or pattern affects newly issued claims; it does not rewrite tokens or application sessions that already exist. Restart after changing patterns because they are cached.
 
 ## Supported flows, scopes, and claims
 
@@ -556,6 +567,8 @@ dotnet test IdentityServer.sln
 
 Host tests cover anonymous discovery, configuration isolation, route handling and authorization-code/PKCE/token flows with simulated identities and profiles. Provider tests check defaults, realm boundaries, LDAP mapping, scoped claims and key persistence. Windows live-directory tests skip when no domain is reachable; portable live-LDAP tests are opt-in. See [deployment verification](docs/kerberos-and-ldap.md#verification) for live-test configuration and the remaining Kerberos/browser checks.
 
+The [2026-10-31 live validation](docs/validation-2026-10-31.md) records 20 successful Chromium SSO flows across AD, Samba and FreeIPA, 10 no-ticket challenges, and live LDAPS/StartTLS checks. It also documents the Linux StartTLS initialization fix, the Nginx response-buffer/realm updates, and their scope. Use the [Linux guide](docs/linux-deployment.md#9-verify-kerberos-and-browser-sso) to verify a new deployment; isolated tests alone do not prove browser or directory interoperability.
+
 Select live tests with `dotnet test IdentityServer.sln --filter Category=LiveDirectory`, or omit them with `--filter "Category!=LiveDirectory"`. Tests use xUnit with the VSTest adapter for CLI and Visual Studio support.
 
 For manual browser testing with the Kestrel development profile, run:
@@ -662,8 +675,11 @@ Use the stages below to locate where sign-in stopped:
 | `Token request rejected` | In code flow, the application makes a separate call to exchange its code for tokens. The logged client ID/secret failure concerns the application's credentials, not the person's Windows password. |
 | `Token endpoint response sizes` | Lengths help diagnose oversized request headers without recording token credentials. Zero means that token was absent, not necessarily an error. This diagnostic covers `/connect/token`; implicit/hybrid tokens returned directly by `/connect/authorize` do not pass through it. |
 | `Error building authorization claims ... during ...` | The stage identifies where preparation stopped. Read the attached exception for the actual cause; successful Windows authentication does not guarantee successful directory lookup or role-pattern processing. |
+| `Authorization denied ... during ...` | A warning, returned to the application as `access_denied`. The person authenticated, but directory policy refused to map them to exactly one user: for example an unknown realm, an unqualified name, no or several matching accounts, or a missing SID/`ipaUniqueID`. The message states the reason. Connectivity, TLS and bind failures remain `server_error`. |
 
 ## Troubleshooting
+
+For Linux, start with the [Linux troubleshooting table](docs/linux-deployment.md#troubleshooting), including Kerberos/keytab, LDAP TLS, systemd and proxy failures. The Windows/IIS-specific cases below apply to those hosts.
 
 Start with the first failed stage in [Reading the logs](#reading-the-logs). A browser password prompt, a rejected application request and an AD read failure involve different accounts/settings; changing a later stage will not fix an earlier failure.
 
@@ -683,7 +699,7 @@ The Windows exchange is not completing. Check whether the browser trusts the hos
 The server address may not be trusted for automatic Windows sign-in. For the local IIS Express profile, open `about:config` and add `https://localhost:44353` to `network.negotiate-auth.trusted-uris` and `network.automatic-ntlm-auth.trusted-uris`, preserving existing comma-separated entries. Use the actual origin for another host/port, then restart Firefox and retry in a normal window. Limit this trust to servers where automatic Windows sign-in is intended. Managed devices can use Firefox's [Authentication enterprise policy](https://firefox-admin-docs.mozilla.org/reference/policies/authentication/) instead of individual preferences.
 
 **Manually entered Windows credentials succeed, but the debugger returns `server_error`.**
-Find `Error building authorization claims ... during ...` and read its exception. Windows can verify the person while the server's separate AD read fails, or a group pattern is invalid. Check the account and stage named in the log. Local accounts skip AD; classification uses Windows' `Local account` SID (`S-1-5-113`).
+Find `Error building authorization claims ... during ...` and read its exception. Windows can verify the person while the server's separate AD read fails, or a group pattern is invalid. An account the directory cannot map to one user returns `access_denied` instead, with an `Authorization denied` warning. Check the account and stage named in the log. Local accounts skip AD; classification uses Windows' `Local account` SID (`S-1-5-113`).
 
 **Browser prompts for Windows credentials repeatedly (401 loop).**
 Check the logs before entering credentials repeatedly. Confirm both IIS authentication features are enabled and the browser trusts the hostname and is offering valid credentials. An unregistered client or rejected redirect returns HTTP 400 (`invalid_request`); correct the client/redirect configuration if it is named in the log.

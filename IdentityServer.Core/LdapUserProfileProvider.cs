@@ -29,7 +29,7 @@ internal sealed class LdapUserProfileProvider : IUserProfileProvider
         var users = ldap.Search(_options.UserBaseDn, filter,
             ["objectSid", "ipaUniqueID", "uid", "sAMAccountName", "displayName", "cn", "mail", "givenName", "sn", "telephoneNumber"], 2);
         if (users.Count != 1)
-            throw new InvalidOperationException("The authenticated identity must resolve to exactly one directory user.");
+            throw new DirectoryIdentityException("The authenticated identity must resolve to exactly one directory user.");
         var user = users[0];
         bool ipa = _options.Provider == DirectoryProvider.FreeIpa;
         string subject = ipa ? user.RequiredString("ipaUniqueID") : SidToString(user.Bytes("objectSid"));
@@ -55,7 +55,7 @@ internal sealed class LdapUserProfileProvider : IUserProfileProvider
     internal string UserFilter(ClaimsPrincipal principal)
     {
         if (principal.Identity?.IsAuthenticated != true || string.IsNullOrWhiteSpace(principal.Identity.Name))
-            throw new InvalidOperationException("A named, authenticated identity is required for directory lookup.");
+            throw new DirectoryIdentityException("A named, authenticated identity is required for directory lookup.");
         bool ipa = _options.Provider == DirectoryProvider.FreeIpa;
         string name = principal.Identity.Name;
         string match;
@@ -71,7 +71,7 @@ internal sealed class LdapUserProfileProvider : IUserProfileProvider
             if (separator > 0 && separator < name.Length - 1)
             {
                 if (!name[(separator + 1)..].Equals(_options.Realm, StringComparison.OrdinalIgnoreCase))
-                    throw new InvalidOperationException("The authenticated Kerberos realm does not match IdentityServer:Directory:Realm.");
+                    throw new DirectoryIdentityException("The authenticated Kerberos realm does not match IdentityServer:Directory:Realm.");
                 username = name[..separator];
             }
             else if (!ipa && name.IndexOf('\\') is int slash && slash > 0 &&
@@ -81,10 +81,10 @@ internal sealed class LdapUserProfileProvider : IUserProfileProvider
                 username = name[(slash + 1)..];
             }
             else
-                throw new InvalidOperationException("Use a realm-qualified Kerberos identity, or configure NetbiosDomain for an AD DOMAIN\\user identity.");
+                throw new DirectoryIdentityException("Use a realm-qualified Kerberos identity, or configure NetbiosDomain for an AD DOMAIN\\user identity.");
 
             if (string.IsNullOrWhiteSpace(username) || username.IndexOfAny(['@', '/', '\\']) >= 0)
-                throw new InvalidOperationException("The authenticated principal is not a supported user principal.");
+                throw new DirectoryIdentityException("The authenticated principal is not a supported user principal.");
             // Resolve canonical principals first. A different UPN suffix in AD is supported via
             // sAMAccountName only inside the explicitly configured realm and directory base.
             match = ipa
@@ -148,9 +148,9 @@ internal sealed record LdapEntry(string DistinguishedName, IReadOnlyDictionary<s
         return values[0] is byte[] bytes ? Encoding.UTF8.GetString(bytes) : (string)values[0];
     }
     internal string RequiredString(string name) => String(name) is { Length: > 0 } value ? value :
-        throw new InvalidOperationException($"The directory entry is missing {name}.");
+        throw new DirectoryIdentityException($"The directory entry is missing {name}.");
     internal byte[] Bytes(string name) => Attributes.TryGetValue(name, out var values) && values.Length > 0 && values[0] is byte[] bytes
-        ? bytes : throw new InvalidOperationException($"The directory entry is missing binary {name}.");
+        ? bytes : throw new DirectoryIdentityException($"The directory entry is missing binary {name}.");
 }
 
 internal interface ILdapSearch : IDisposable
@@ -177,7 +177,20 @@ internal sealed class LdapSearch : ILdapSearch
             _connection.SessionOptions.ProtocolVersion = 3;
             _connection.SessionOptions.ReferralChasing = ReferralChasingOptions.None;
             _connection.SessionOptions.SecureSocketLayer = tls;
-            if (!tls) _connection.SessionOptions.StartTransportLayerSecurity(null);
+            if (!tls)
+            {
+                if (OperatingSystem.IsLinux())
+                {
+                    // On Linux, .NET initializes the LDAP URI only when connecting/binding.
+                    // StartTLS itself does not do that. Open anonymously first; credentials
+                    // are assigned only after the TLS upgrade succeeds below.
+                    AuthType authentication = _connection.AuthType;
+                    _connection.AuthType = AuthType.Anonymous;
+                    _connection.Bind();
+                    _connection.AuthType = authentication;
+                }
+                _connection.SessionOptions.StartTransportLayerSecurity(null);
+            }
             // Use OS certificate validation. Never install an accept-all certificate callback.
             // On Linux Negotiate binds using GSSAPI and the process's Kerberos credential cache.
             if (!string.IsNullOrWhiteSpace(options.BindDn))
@@ -187,6 +200,8 @@ internal sealed class LdapSearch : ILdapSearch
         catch { _connection.Dispose(); throw; }
     }
 
+    internal LdapSearch(LdapConnection connection) => _connection = connection; // Tests: an already configured connection.
+
     public IReadOnlyList<LdapEntry> Search(string searchBase, string filter, string[] attributes, int sizeLimit = 0)
     {
         var request = new SearchRequest(searchBase, filter, SearchScope.Subtree, attributes) { SizeLimit = sizeLimit };
@@ -195,7 +210,11 @@ internal sealed class LdapSearch : ILdapSearch
         var entries = new List<LdapEntry>();
         do
         {
-            var response = (SearchResponse)_connection.SendRequest(request);
+            SearchResponse response;
+            try { response = (SearchResponse)_connection.SendRequest(request); }
+            // A size-limited search returns its partial entries; the caller decides whether they suffice.
+            catch (DirectoryOperationException ex) when (sizeLimit != 0 &&
+                ex.Response is SearchResponse { ResultCode: ResultCode.SizeLimitExceeded } partial) { response = partial; }
             foreach (SearchResultEntry entry in response.Entries)
             {
                 var values = new Dictionary<string, object[]>(StringComparer.OrdinalIgnoreCase);

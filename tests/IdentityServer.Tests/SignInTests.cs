@@ -1,3 +1,4 @@
+using System.DirectoryServices.Protocols;
 using System.Net;
 using System.Net.Http.Json;
 using System.Security.Cryptography;
@@ -80,7 +81,26 @@ public sealed class SignInTests
         Assert.Equal(HttpStatusCode.OK, anonymous.StatusCode);
     }
 
-    private static WebApplicationFactory<Program> CreateHost(string provider, string protocol, TestProfiles profiles) =>
+    [Theory]
+    [InlineData(true, "access_denied")]
+    [InlineData(false, "server_error")]
+    public async Task ProfilePolicyRejection_IsAccessDenied_WhileFaultsRemainServerErrors(bool policy, string expected)
+    {
+        var profiles = new FailingProfiles(policy
+            ? new DirectoryIdentityException("The authenticated identity must resolve to exactly one directory user.")
+            : new LdapException(81, "The LDAP server is unavailable."));
+        using var host = CreateHost("ActiveDirectory", "Kerberos", profiles);
+        using var client = host.CreateClient(new() { AllowAutoRedirect = false });
+        using var authorization = await client.GetAsync(AuthorizeUrl(), TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Redirect, authorization.StatusCode);
+        Assert.StartsWith(Callback, authorization.Headers.Location!.ToString());
+        var query = QueryHelpers.ParseQuery(authorization.Headers.Location.Query);
+        Assert.Equal(expected, query["error"].ToString());
+        Assert.False(query.ContainsKey("code"));
+        Assert.Equal(1, profiles.Reads);
+    }
+
+    private static WebApplicationFactory<Program> CreateHost(string provider, string protocol, IUserProfileProvider profiles) =>
         new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
         {
             builder.ConfigureAppConfiguration((_, configuration) => configuration.AddInMemoryCollection(new Dictionary<string, string?>
@@ -126,6 +146,12 @@ public sealed class SignInTests
             return new() { Subject = subject, Username = "alice", AccountName = principal.Identity!.Name!, DisplayName = "Alice",
                 Email = "alice@example.com", Groups = ["App Readers", "Administrators"] };
         }
+    }
+
+    private sealed class FailingProfiles(Exception error) : IUserProfileProvider
+    {
+        public int Reads { get; private set; }
+        public UserProfile GetProfile(ClaimsPrincipal principal, bool includeGroups) { Reads++; throw error; }
     }
 }
 

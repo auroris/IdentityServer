@@ -40,7 +40,9 @@ internal sealed class IdentityProviderOptions
         var directory = configuration.GetSection("IdentityServer:Directory");
         var provider = ReadEnum<DirectoryProvider>(directory["Provider"], "IdentityServer:Directory:Provider");
         var authentication = ReadEnum<BrowserAuthenticationMode>(configuration["IdentityServer:Authentication:Mode"], "IdentityServer:Authentication:Mode");
-        string? server = directory["Server"];
+        // Trim names so a stray space from an environment file cannot reach a bind or search. Never trim BindPassword.
+        string? Setting(string key) => directory[key]?.Trim();
+        string? server = Setting("Server");
         if (provider == DirectoryProvider.Auto)
             provider = windows && string.IsNullOrWhiteSpace(server) ? DirectoryProvider.Windows : DirectoryProvider.ActiveDirectory;
         if (authentication == BrowserAuthenticationMode.Auto)
@@ -70,7 +72,7 @@ internal sealed class IdentityProviderOptions
         string realm = Required(directory, "Realm");
         if (realm.IndexOfAny(['@', '\\', '/', ' ', '\t', '\r', '\n']) >= 0)
             throw new InvalidOperationException("IdentityServer:Directory:Realm must be a Kerberos realm, for example EXAMPLE.COM.");
-        string? bindDn = directory["BindDn"];
+        string? bindDn = Setting("BindDn");
         string? bindPassword = directory["BindPassword"];
         if (string.IsNullOrWhiteSpace(bindDn) != string.IsNullOrEmpty(bindPassword))
             throw new InvalidOperationException("Set both IdentityServer:Directory:BindDn and BindPassword, or neither to use the process credentials.");
@@ -78,15 +80,15 @@ internal sealed class IdentityProviderOptions
         if (timeout < 1 || timeout > 120)
             throw new InvalidOperationException("IdentityServer:Directory:TimeoutSeconds must be between 1 and 120.");
         foreach (string key in new[] { "UserBaseDn", "GroupBaseDn", "NetbiosDomain" })
-            if (directory[key] is not null && string.IsNullOrWhiteSpace(directory[key]))
+            if (Setting(key) is "")
                 throw new InvalidOperationException($"IdentityServer:Directory:{key} must be nonempty when configured.");
 
         return new()
         {
             Authentication = authentication, Provider = provider, Server = uri, BaseDn = baseDn,
-            Realm = realm, NetbiosDomain = directory["NetbiosDomain"],
-            UserBaseDn = directory["UserBaseDn"] ?? (provider == DirectoryProvider.FreeIpa ? "cn=users,cn=accounts," + baseDn : baseDn),
-            GroupBaseDn = directory["GroupBaseDn"] ?? (provider == DirectoryProvider.FreeIpa ? "cn=groups,cn=accounts," + baseDn : baseDn),
+            Realm = realm, NetbiosDomain = Setting("NetbiosDomain"),
+            UserBaseDn = Setting("UserBaseDn") ?? (provider == DirectoryProvider.FreeIpa ? "cn=users,cn=accounts," + baseDn : baseDn),
+            GroupBaseDn = Setting("GroupBaseDn") ?? (provider == DirectoryProvider.FreeIpa ? "cn=groups,cn=accounts," + baseDn : baseDn),
             BindDn = bindDn, BindPassword = bindPassword, TimeoutSeconds = timeout
         };
     }

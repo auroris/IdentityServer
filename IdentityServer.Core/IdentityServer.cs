@@ -288,6 +288,13 @@ namespace IdentityServer
                             logger.LogInformation("Authorization claims prepared for {User} via {AuthType} for client '{ClientId}'; OpenIddict will now build the protocol response.",
                                 winAccountName, result.Principal.Identity.AuthenticationType, context.Request.ClientId);
                         }
+                        catch (DirectoryIdentityException ex)
+                        {
+                            // An expected policy outcome, not a fault: the person is authenticated but not mapped to a user.
+                            logger.LogWarning("Authorization denied for user '{User}' during {Stage}: {Reason} Returning access_denied.",
+                                winAccountName ?? "(unknown)", stage, ex.Message);
+                            context.Reject(error: Errors.AccessDenied, description: "The authenticated identity is not permitted to sign in.");
+                        }
                         catch (Exception ex)
                         {
                             logger.LogError(ex, "Error building authorization claims for user '{User}' during {Stage}; returning server_error. For a directory failure, check realm mapping, connectivity, certificate trust and the configured directory credentials.",

@@ -27,6 +27,9 @@ public interface IUserProfileProvider
     UserProfile GetProfile(ClaimsPrincipal principal, bool includeGroups);
 }
 
+/// <summary>Directory policy refuses this authenticated identity. Denies access; not a server fault.</summary>
+internal sealed class DirectoryIdentityException(string message) : InvalidOperationException(message);
+
 /// <summary>Resolves Windows domain accounts using process credentials and handles local accounts without directory access.</summary>
 [SupportedOSPlatform("windows")]
 internal sealed class WindowsUserProfileProvider : IUserProfileProvider
@@ -34,10 +37,10 @@ internal sealed class WindowsUserProfileProvider : IUserProfileProvider
     public UserProfile GetProfile(ClaimsPrincipal principal, bool includeGroups)
     {
         if (principal.Identity?.IsAuthenticated != true)
-            throw new InvalidOperationException("An authenticated Windows identity is required.");
-        string account = principal.Identity.Name ?? throw new InvalidOperationException("The authenticated account has no name.");
+            throw new DirectoryIdentityException("An authenticated Windows identity is required.");
+        string account = principal.Identity.Name ?? throw new DirectoryIdentityException("The authenticated account has no name.");
         string subject = principal.FindFirst(ClaimTypes.PrimarySid)?.Value
-            ?? throw new InvalidOperationException("The authenticated Windows account has no primary SID.");
+            ?? throw new DirectoryIdentityException("The authenticated Windows account has no primary SID.");
         string username = account.Contains('\\') ? account[(account.IndexOf('\\') + 1)..] : account;
         if (principal.HasClaim(ClaimTypes.GroupSid, "S-1-5-113"))
             return new() { Subject = subject, Username = username, AccountName = account, DisplayName = username, IsLocal = true };

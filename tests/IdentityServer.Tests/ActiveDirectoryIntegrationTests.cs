@@ -133,7 +133,7 @@ public class ActiveDirectoryIntegrationTests(ITestOutputHelper output)
             var userMemberInfo = members.FirstOrDefault(m => m.ObjectType == ObjectClass.User);
             if (userMemberInfo != null)
             {
-                using var userMember = new ADUser(userMemberInfo.DistinguishedName);
+                using var userMember = new ADUser($"LDAP://{userMemberInfo.DistinguishedName}");
                 memberCn = userMember.Name;
                 chosenGroup = dn;
                 break;

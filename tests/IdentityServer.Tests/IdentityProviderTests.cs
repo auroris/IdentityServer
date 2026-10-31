@@ -79,9 +79,31 @@ public sealed class IdentityProviderTests
     [InlineData("IdentityServer:Directory:TimeoutSeconds", "0")]
     [InlineData("IdentityServer:Directory:UserBaseDn", "")]
     [InlineData("IdentityServer:Directory:GroupBaseDn", " ")]
+    [InlineData("IdentityServer:Directory:NetbiosDomain", " \t")]
     public void InvalidConfiguration_FailsInsteadOfFallingBack(string key, string value)
     {
         Assert.Throws<InvalidOperationException>(() => IdentityProviderOptions.Read(LdapConfiguration("FreeIpa", (key, value)), isWindows: true));
+    }
+
+    [Theory]
+    [InlineData("Server", "ldaps://directory.example.com:636")]
+    [InlineData("BindDn", "cn=reader,dc=example,dc=com")]
+    [InlineData("UserBaseDn", "ou=People,dc=example,dc=com")]
+    [InlineData("GroupBaseDn", "ou=Groups,dc=example,dc=com")]
+    [InlineData("NetbiosDomain", "EXAMPLE")]
+    public void DirectoryNamesAreTrimmed_ButBindPasswordIsNot(string key, string value)
+    {
+        var options = IdentityProviderOptions.Read(LdapConfiguration("ActiveDirectory",
+            ("IdentityServer:Directory:BindDn", "uid=reader,dc=example,dc=com"),
+            ("IdentityServer:Directory:BindPassword", " pass word "),
+            ("IdentityServer:Directory:" + key, " " + value + " \t")));
+        string? actual = key switch
+        {
+            "Server" => options.Server!.OriginalString, "BindDn" => options.BindDn, "UserBaseDn" => options.UserBaseDn,
+            "GroupBaseDn" => options.GroupBaseDn, _ => options.NetbiosDomain
+        };
+        Assert.Equal(value, actual);
+        Assert.Equal(" pass word ", options.BindPassword);
     }
 
     [Theory]
