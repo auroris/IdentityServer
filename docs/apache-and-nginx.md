@@ -1,10 +1,10 @@
 # Apache and Nginx hosting
 
-The Linux hosting arrangement is a separate Kestrel process, supervised by systemd, behind Apache or Nginx. Existing Windows/IIS installations need no new settings. IIS still supplies its own authentication and application path.
+The Linux hosting arrangement is a separate Kestrel process, supervised by systemd, behind Apache or Nginx. On Windows, IIS supplies its own authentication and application path.
 
 The supplied examples use **ProxyKerberos**: the front server authenticates the browser with Kerberos and forwards the full principal to IdentityServer over an authenticated, restricted backend connection. IdentityServer then reads the selected LDAP directory and issues OIDC tokens. This avoids passing a connection-bound Negotiate exchange through a generic backend connection pool.
 
-Apache requires **mod_auth_gssapi**. Nginx requires the **SPNEGO authentication module**, available in distributions such as Debian/Ubuntu as `libnginx-mod-http-auth-spnego`; it is not part of stock Nginx. Both examples disable password/Basic fallback and preserve the principal's realm. See the [Apache module](https://github.com/gssapi/mod_auth_gssapi) and [Nginx module](https://github.com/stnoonan/spnego-http-auth-nginx-module) documentation. Native Kestrel Negotiate remains available, but forwarding it requires a proxy with the [connection affinity Microsoft specifies](https://learn.microsoft.com/en-us/aspnet/core/security/authentication/windowsauth?view=aspnetcore-10.0#kestrel); ordinary keepalive or IP stickiness is insufficient. These templates use proxy authentication instead.
+Apache requires **mod_auth_gssapi**. Nginx requires the **SPNEGO authentication module**, available in distributions such as Debian/Ubuntu as `libnginx-mod-http-auth-spnego`; it is not part of stock Nginx. Both examples disable password/Basic fallback and preserve the principal's realm. See the [Apache module](https://github.com/gssapi/mod_auth_gssapi) and [Nginx module](https://github.com/stnoonan/spnego-http-auth-nginx-module) documentation. Forwarding native Kestrel Negotiate requires a proxy with the [connection affinity Microsoft specifies](https://learn.microsoft.com/en-us/aspnet/core/security/authentication/windowsauth?view=aspnetcore-10.0#kestrel); ordinary keepalive or IP stickiness is insufficient. These templates use proxy authentication instead.
 
 ## Deployment files
 
@@ -23,7 +23,7 @@ These files are templates and are deliberately excluded from application publish
 
 ## Application configuration
 
-For an existing deployment, the additional settings are:
+Configure proxy authentication, the public URL and forwarding:
 
 ```json
 {
@@ -44,9 +44,9 @@ Keep the appropriate [LDAP provider settings](kerberos-and-ldap.md). Proxy princ
 
 | Setting | Behavior |
 |---|---|
-| `PathBase` | Optional fixed public application path, such as `/IdentityServer`. Omit for existing IIS integration or root hosting. Matching incoming prefixes are separated before routing and authentication; other paths return 404. |
+| `PathBase` | Optional fixed public application path, such as `/IdentityServer`. Omit for IIS integration or root hosting. Matching incoming prefixes are separated before routing and authentication; other paths return 404. |
 | `PathBaseMode` | `Preserve` (default): proxy forwards the complete path. `Strip`: proxy removes the prefix, so the app restores its configured PathBase, accepting this arrangement only from an explicitly trusted proxy. |
-| `UseForwardedHeaders` | Enable with `true` for these examples. The existing switch still accepts host-configured options when no `ReverseProxy` section is supplied. |
+| `UseForwardedHeaders` | Enable with `true` for these examples. Uses host-configured options when no `ReverseProxy` section is supplied. |
 | `ReverseProxy:KnownProxies` | Exact TCP peer IP addresses, not DNS names or subnets. Trust is determined before forwarded headers change the apparent client address. IPv4-mapped IPv6 addresses are handled. |
 | `ReverseProxy:AllowedHosts` | Exact public hostnames without ports. Defaults to the hostname in an explicit `ServerUri`. Required when issuer selection is automatic (`ServerUri: "*"`). |
 | `Authentication:Mode` | Explicitly select `ProxyKerberos` to accept a proxy-authenticated principal. Auto/native modes never trust the identity header. |
@@ -56,7 +56,7 @@ Forwarding accepts **one hop** and requires matching counts of `X-Forwarded-For`
 
 Let `UseIdentityServer` apply the forwarded headers after capturing the connection peer. Do not enable `ASPNETCORE_FORWARDEDHEADERS_ENABLED` or put a separate forwarded-header middleware ahead of it in this mode.
 
-`ServerUri` is the OIDC issuer, not a routing switch. When an explicit `PathBase` is used, the URI must include that same path. Discovery, authorization, token and signing-key URLs then use the public prefix. An existing host-supplied/IIS PathBase is preserved, without adding it twice. Normal IIS installations should leave these new settings unset.
+`ServerUri` is the OIDC issuer, not a routing switch. When an explicit `PathBase` is used, the URI must include that same path. Discovery, authorization, token and signing-key URLs then use the public prefix. A host-supplied/IIS PathBase is used without adding it twice. With IIS integration, omit `PathBase` and `PathBaseMode` so IIS supplies the application path.
 
 ### Backend trust
 
@@ -112,6 +112,6 @@ Before enabling a real deployment:
 3. From a client with a Kerberos ticket and browser trust for the public hostname, complete authorization-code/PKCE sign-in with a registered application. Confirm the directory subject and allowed roles. Discovery succeeding alone does not demonstrate Kerberos authentication.
 4. Attempt requests with caller-supplied identity/forwarding headers and no Kerberos authentication. The proxy must challenge authorization requests and must clear identity headers on anonymous paths. Direct backend requests with a missing/wrong secret must not authenticate.
 5. Test two different users sequentially over reused connections; no identity may carry over. Confirm token redemption needs only client/code credentials, and unknown/root paths do not expose a second copy of prefixed protocol endpoints.
-6. Restart IdentityServer and verify saved-key continuity, then check service/proxy logs without exposing secrets. Keep the existing Windows/IIS regression checks when deploying the same build there.
+6. Restart IdentityServer and verify saved-key continuity, then check service/proxy logs without exposing secrets. For Windows/IIS deployments, also run the [IIS verification checks](../README.md#hosting-in-iis).
 
 Proxy template syntax, module behavior, live Kerberos and LDAP interoperability require the actual Apache/Nginx environment. Passing the in-process tests or publishing Linux binaries does not substitute for those deployment checks.

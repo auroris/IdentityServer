@@ -32,7 +32,7 @@ public sealed class SignInTests
     [InlineData("FreeIpa", "81f8a447-5bdd-4f57-9e35-678912302922")]
     [InlineData("SambaAd", "S-1-5-21-1-2-3-1001")]
     [InlineData("ActiveDirectory", "S-1-5-21-1-2-3-1001")]
-    public async Task KerberosPrincipal_CompletesCodeFlow_WithExistingClaimContract(string provider, string subject)
+    public async Task KerberosPrincipal_CompletesCodeFlow_WithProviderClaims(string provider, string subject)
     {
         var profiles = new TestProfiles(subject);
         using var host = CreateHost(provider, "Kerberos", profiles);

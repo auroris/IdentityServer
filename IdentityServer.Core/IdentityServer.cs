@@ -129,7 +129,7 @@ namespace IdentityServer
                 // With no OpenIddict stores, our handlers below must validate configured clients
                 // and redirect destinations. Degraded mode does not mean validation is optional.
                 options.EnableDegradedMode();
-                // Permit existing intranet HTTP deployments. This does not encrypt traffic or
+                // Permit HTTP deployments. This does not encrypt traffic or
                 // relax a client application's HTTPS requirements; HTTPS belongs in the host/proxy.
                 options.UseAspNetCore()
                     .DisableTransportSecurityRequirement();

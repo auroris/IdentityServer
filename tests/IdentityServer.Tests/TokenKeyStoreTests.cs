@@ -37,25 +37,27 @@ public sealed class TokenKeyStoreTests : IDisposable
             Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite, File.GetUnixFileMode(keyFile));
     }
 
-    [Fact]
-    public void ExistingWindowsDpapiFileRemainsUsableWithoutNewConfiguration()
+    [Theory]
+    [InlineData("signing-key")]
+    [InlineData("encryption-key")]
+    public void WindowsKeysWithoutPasswordUseDpapiFiles_AndSurviveRestart(string name)
     {
         if (!OperatingSystem.IsWindows()) Assert.Skip("DPAPI requires Windows.");
-        Directory.CreateDirectory(_path);
-        using var original = RSA.Create(2048);
-        File.WriteAllBytes(Path.Combine(_path, "signing-key.bin"),
-            ProtectedData.Protect(Encoding.UTF8.GetBytes(original.ExportPkcs8PrivateKeyPem()), null, DataProtectionScope.LocalMachine));
         var configuration = Configuration(("IdentityServer:PersistKeys", "true"), ("IdentityServer:DataPath", _path));
-        using var loaded = TokenKeyStore.LoadOrCreate(configuration, "signing-key").Rsa;
+        using var original = TokenKeyStore.LoadOrCreate(configuration, name).Rsa;
+        string keyFile = Path.Combine(_path, name + ".bin");
+        byte[] saved = File.ReadAllBytes(keyFile);
+        using var loaded = TokenKeyStore.LoadOrCreate(configuration, name).Rsa;
         Assert.Equal(original.ExportSubjectPublicKeyInfo(), loaded.ExportSubjectPublicKeyInfo());
-        Assert.False(File.Exists(Path.Combine(_path, "signing-key.pem")));
+        Assert.Equal(saved, File.ReadAllBytes(keyFile));
+        Assert.False(File.Exists(Path.Combine(_path, name + ".pem")));
     }
 
     [Fact]
-    public void ChangingProtectionFormatRequiresDeliberateMigration()
+    public void MismatchedKeyProtectionConfigurationDoesNotCreateKeys()
     {
         Directory.CreateDirectory(_path);
-        File.WriteAllText(Path.Combine(_path, "signing-key.bin"), "existing-machine-protected-key");
+        File.WriteAllText(Path.Combine(_path, "signing-key.bin"), "machine-protected-key");
         var configuration = Configuration(("IdentityServer:PersistKeys", "true"), ("IdentityServer:DataPath", _path),
             ("IdentityServer:KeyProtectionPassword", "separate-secret"));
         Assert.Throws<InvalidOperationException>(() => TokenKeyStore.LoadOrCreate(configuration, "signing-key"));

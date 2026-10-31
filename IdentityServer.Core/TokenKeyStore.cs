@@ -7,7 +7,7 @@ using Microsoft.IdentityModel.Tokens;
 
 namespace IdentityServer;
 
-/// <summary>Preserves Windows DPAPI files; opt-in password-encrypted PKCS#8 works on both OSes.</summary>
+/// <summary>Stores token keys using Windows DPAPI or password-encrypted PKCS#8.</summary>
 internal static class TokenKeyStore
 {
     internal static void Validate(IConfiguration configuration)
@@ -33,7 +33,7 @@ internal static class TokenKeyStore
             if (!File.Exists(keyPath))
             {
                 if (File.Exists(otherPath))
-                    throw new InvalidOperationException("A token key exists in a different protection format. Migrate it deliberately or use the original key-protection configuration; keys will not be silently replaced.");
+                    throw new InvalidOperationException("A token key exists in a different protection format. IdentityServer:KeyProtectionPassword must match the stored key's protection; keys will not be silently replaced.");
                 byte[] encrypted;
                 if (portable)
                     encrypted = Encoding.UTF8.GetBytes(rsa.ExportEncryptedPkcs8PrivateKeyPem(password!,

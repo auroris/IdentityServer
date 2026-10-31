@@ -72,7 +72,7 @@ internal sealed class ProxyHostingOptions
 
     internal void Configure(ForwardedHeadersOptions options)
     {
-        // Keep existing host-supplied/IIS options untouched unless the new section is configured.
+        // Use host-supplied/IIS options when no ReverseProxy section is configured.
         if (!HasProxyConfiguration) return;
         options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto | ForwardedHeaders.XForwardedHost;
         options.ForwardLimit = 1;

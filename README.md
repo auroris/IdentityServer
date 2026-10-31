@@ -2,8 +2,6 @@
 
 An OpenID Connect (OIDC) server using Negotiate/Kerberos authentication, built on ASP.NET Core and [OpenIddict](https://documentation.openiddict.com/). It reads profile details and direct group memberships from Active Directory (AD), Samba AD or FreeIPA.
 
-**Existing Windows installations need no new settings.** Automatic domain discovery, process-account directory access and local Windows accounts remain the default. Linux and explicit directory connections use the [authentication and directory settings](#authentication-and-directory-providers).
-
 Run it standalone or embed its core library in your own ASP.NET Core application. The shared Active Directory library can also be used independently.
 
 > **Note:** "IdentityServer" in this project refers to the assembly name and configuration section — it is **not** related to Duende IdentityServer.
@@ -104,7 +102,7 @@ This project bridges Windows sign-in and OIDC without a separate user database. 
 
 ## Prerequisites
 
-- Windows or Linux compatible with .NET 10. Windows defaults need no new settings; Linux requires the [Kerberos/LDAP setup](docs/kerberos-and-ldap.md). The standalone `ActiveDirectory` wrapper library remains Windows-only.
+- Windows or Linux compatible with .NET 10. Windows defaults to automatic domain discovery and process-account directory access; Linux requires the [Kerberos/LDAP setup](docs/kerberos-and-ldap.md). The standalone `ActiveDirectory` wrapper library is Windows-only.
 - .NET 10 SDK for building; ASP.NET Core 10 runtime for Kestrel deployment, or the .NET 10 Hosting Bundle for IIS.
 - For default Windows domain sign-in, a domain-joined server with directory read access under its process account. Portable LDAP providers use explicit directory settings and process credentials or a dedicated read account.
 - Browser intranet/trust settings permitting automatic Windows authentication to the server's hostname.
@@ -149,7 +147,7 @@ Grant the process account access to the certificate and supply its password, if 
 
 The host does not call `UseWindowsService`. Windows service hosting requires that addition with `Microsoft.Extensions.Hosting.WindowsServices`, or a service wrapper. Configure the service's working directory and process account accordingly.
 
-The application permits HTTP for existing intranet setups, but HTTPS protects tokens in transit and avoids common client/browser restrictions. In particular, clients often use a **correlation cookie** to remember which browser started sign-in. A cross-site POST return can require `SameSite=None; Secure`, which requires HTTPS. These are cookies of the client application; this server's sign-in handler does not create a login cookie. See [SameSite cookies](https://learn.microsoft.com/en-us/aspnet/core/security/samesite?view=aspnetcore-10.0).
+The application permits HTTP, but HTTPS protects tokens in transit and avoids common client/browser restrictions. In particular, clients often use a **correlation cookie** to remember which browser started sign-in. A cross-site POST return can require `SameSite=None; Secure`, which requires HTTPS. These are cookies of the client application; this server's sign-in handler does not create a login cookie. See [SameSite cookies](https://learn.microsoft.com/en-us/aspnet/core/security/samesite?view=aspnetcore-10.0).
 
 ### Hosting in IIS
 
@@ -168,7 +166,7 @@ With automatic issuer detection, discovery and endpoints include that applicatio
 
 Use a separate Kestrel service behind the proxy, optionally under a path such as `/IdentityServer`. The [Apache and Nginx guide](docs/apache-and-nginx.md) includes proxy configurations, a systemd unit, application settings and tests. Apache uses mod_auth_gssapi; Nginx requires its SPNEGO authentication module.
 
-Select `Authentication:Mode: ProxyKerberos` for these examples: the front server verifies Kerberos and supplies a principal over an explicitly trusted, secret-protected connection. Set `PathBase` to the public prefix and configure `ReverseProxy:KnownProxies` with the actual backend peer addresses. Windows/IIS keeps its existing defaults when these settings are omitted.
+Select `Authentication:Mode: ProxyKerberos` for these examples: the front server verifies Kerberos and supplies a principal over an explicitly trusted, secret-protected connection. Set `PathBase` to the public prefix and configure `ReverseProxy:KnownProxies` with the actual backend peer addresses. IIS supplies authentication and the application path through its own integration.
 
 ### Checking a deployment
 
@@ -197,7 +195,7 @@ Negotiate can retain authentication state on a connection. A proxy forwarding na
 
 | Setup | Authentication selected by Auto | Directory lookup |
 |---|---|---|
-| Windows, no new settings | Negotiate, including existing NTLM/local accounts | Windows automatic discovery |
+| Windows, default settings | Negotiate, including NTLM/local accounts | Windows automatic discovery |
 | Windows, explicit AD/Samba LDAP settings | Negotiate | Portable LDAP with AD schema |
 | Linux, AD/Samba LDAP settings | Kerberos required | Portable LDAP with AD schema |
 | FreeIPA on either OS | Kerberos required | Portable LDAP with FreeIPA schema |
@@ -319,7 +317,7 @@ Sets the **issuer**, the server identity clients expect in discovery and tokens.
 
 Defaults to `false`. A reverse proxy can receive `https://identity.example.com` and forward it internally as HTTP to a different address. **Forwarded headers** describe the original request: `X-Forwarded-Proto` carries the scheme (`http`/`https`), and `X-Forwarded-Host` carries the hostname. The middleware can use them so issuer and endpoint generation see the public address.
 
-Set this switch to `true` when your hosting arrangement needs that middleware. Add `IdentityServer:ReverseProxy:KnownProxies` with explicit proxy IPs and set an absolute `ServerUri` (or `ReverseProxy:AllowedHosts` with exact public hostnames). This configures one trusted hop for forwarded client address, scheme and host. Without the new section, existing host-supplied `ForwardedHeadersOptions` remains unchanged. `X-Forwarded-Prefix` is not accepted by the new configuration; use a fixed `IdentityServer:PathBase` and optional `PathBaseMode: Strip` instead. See [proxy/path configuration](docs/apache-and-nginx.md#application-configuration). Forwarded headers do not authenticate users or fix native Negotiate connection affinity.
+Set this switch to `true` when your hosting arrangement needs that middleware. Add `IdentityServer:ReverseProxy:KnownProxies` with explicit proxy IPs and set an absolute `ServerUri` (or `ReverseProxy:AllowedHosts` with exact public hostnames). This configures one trusted hop for forwarded client address, scheme and host. Without a `ReverseProxy` section, the middleware uses host-supplied `ForwardedHeadersOptions`. The `ReverseProxy` configuration does not accept `X-Forwarded-Prefix`; use a fixed `IdentityServer:PathBase` and optional `PathBaseMode: Strip` instead. See [proxy/path configuration](docs/apache-and-nginx.md#application-configuration). Forwarded headers do not authenticate users or fix native Negotiate connection affinity.
 
 #### IdentityServer:PersistKeys
 
@@ -328,9 +326,9 @@ Controls whether the server reuses its token keys after a restart. The **signing
 - `false` (default): startup generates new keys. Outstanding codes can no longer be decrypted after a restart; existing tokens may fail validation as clients refresh cached signing keys. Some clients may continue accepting a signed token while its old public key remains cached, so a restart is not a reliable immediate revocation mechanism.
 - `true`: load the existing files under `DataPath`, or create them if missing. Reusing keys prevents this restart-related disruption; tokens still expire according to their lifetimes.
 
-On Windows, without `IdentityServer:KeyProtectionPassword`, files continue to use **DPAPI** with machine scope. Existing `.bin` files remain compatible and tied to that Windows machine. Restrict file permissions to the service account and administrators; copying them does not migrate the keys.
+On Windows, without `IdentityServer:KeyProtectionPassword`, keys are stored in **DPAPI**-protected `.bin` files with machine scope. These files can only be decrypted on the Windows machine that created them. Restrict file permissions to the service account and administrators.
 
-With `IdentityServer:KeyProtectionPassword`, both operating systems use password-encrypted PKCS#8 `.pem` files. Linux requires this setting when persistence is enabled. Supply a strong password through a deployment secret such as `IdentityServer__KeyProtectionPassword`, separate from the key directory, and retain it across restarts. Wrong passwords or damaged files fail without replacing keys. Switching protection formats or changing the password requires deliberate migration/re-encryption; the application refuses to silently replace a key found only in the other format. See [persistent keys](docs/kerberos-and-ldap.md#persistent-token-keys).
+With `IdentityServer:KeyProtectionPassword`, both operating systems use password-encrypted PKCS#8 `.pem` files. Linux requires this setting when persistence is enabled. Supply a strong password through a deployment secret such as `IdentityServer__KeyProtectionPassword`, separate from the key directory, and retain it across restarts. Startup fails without replacing keys if the password is wrong, a key file is damaged, or a key exists only in the other protection format. See [persistent keys](docs/kerberos-and-ldap.md#persistent-token-keys).
 
 #### IdentityServer:DataPath
 
@@ -395,7 +393,7 @@ Lists the applications that can request tokens. A **public client**, such as bro
 
 Client IDs are matched without regard to case; configured secrets are case-sensitive. The secret belongs to the application and is unrelated to a person's Windows password. Use PKCE for code flows, especially for public clients; it serves a different purpose from a shared client secret.
 
-A missing or empty client list accepts arbitrary client IDs. A `ClientId` of `"*"` also permits unmatched IDs, and a `ClientSecret` of `"*"` bypasses secret validation. These are permissive compatibility options, not values required to make sign-in work. Use explicit entries to restrict applications. The supplied ID `optional` is just a registered test name, not a special keyword.
+A missing or empty client list accepts arbitrary client IDs. A `ClientId` of `"*"` also permits unmatched IDs, and a `ClientSecret` of `"*"` bypasses secret validation. Use explicit entries to restrict applications. The supplied ID `optional` is just a registered test name, not a special keyword.
 
 #### IdentityServer:Groups
 
@@ -437,7 +435,7 @@ Include `openid` for sign-in: this implementation adds the required **subject** 
 | `email` | `email` (from directory `mail`, falling back to `username@localhost`) |
 | `roles` | `role` (one per direct directory group matching `IdentityServer:Groups`) |
 
-For a local machine account, the available claims are `sub`, the account name without its machine prefix, the Windows account name and a placeholder email, according to the requested scopes. There are no AD profile fields or group roles. A `username@localhost` email is a compatibility placeholder, not proof of a deliverable or verified mailbox.
+For a local machine account, the available claims are `sub`, the account name without its machine prefix, the Windows account name and a placeholder email, according to the requested scopes. There are no AD profile fields or group roles. A `username@localhost` email is a placeholder, not proof of a deliverable or verified mailbox.
 
 Except for `sub`, this implementation uses .NET `ClaimTypes` identifiers. These look like web addresses but act as names; the client does not fetch them. For example, the name claim is `http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name`, email is `http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress`, and role is `http://schemas.microsoft.com/ws/2008/06/identity/claims/role`. In .NET, use the corresponding `ClaimTypes` constants. Other clients must read/map these full identifiers instead of assuming short names such as `name` or `email`.
 
@@ -537,7 +535,7 @@ Scope searches with an LDAP root such as `LDAP://OU=People,DC=example,DC=com`, u
 
 `Find<T>(howMany)` caps results; `PageSize` enables paging beyond the domain controller's unpaged limit. Sorting a capped result sorts only that subset. `PropertiesToSearch` ORs its entries; `AdditionalFilter` accepts trusted raw LDAP and must not contain unescaped input.
 
-Both libraries target .NET 10. The `ActiveDirectory` wrappers still require Windows; IdentityServer's portable LDAP providers use `System.DirectoryServices.Protocols` separately. The core project keeps platform-compatibility analysis enabled and guards its Windows provider. To reference only the wrappers, add:
+Both libraries target .NET 10. The `ActiveDirectory` wrappers require Windows; IdentityServer's portable LDAP providers use `System.DirectoryServices.Protocols` separately. The core project keeps platform-compatibility analysis enabled and guards its Windows provider. To reference only the wrappers, add:
 
 ```xml
 <PropertyGroup>
@@ -685,10 +683,10 @@ The Windows exchange is not completing. Check whether the browser trusts the hos
 The server address may not be trusted for automatic Windows sign-in. For the local IIS Express profile, open `about:config` and add `https://localhost:44353` to `network.negotiate-auth.trusted-uris` and `network.automatic-ntlm-auth.trusted-uris`, preserving existing comma-separated entries. Use the actual origin for another host/port, then restart Firefox and retry in a normal window. Limit this trust to servers where automatic Windows sign-in is intended. Managed devices can use Firefox's [Authentication enterprise policy](https://firefox-admin-docs.mozilla.org/reference/policies/authentication/) instead of individual preferences.
 
 **Manually entered Windows credentials succeed, but the debugger returns `server_error`.**
-Find `Error building authorization claims ... during ...` and read its exception. Windows can verify the person while the server's separate AD read fails, or a group pattern is invalid. Check the account and stage named in the log. Local accounts should skip AD; classification uses Windows' `Local account` SID (`S-1-5-113`). Older builds used the `Local` logon SID, which described how the person logged in rather than where the account lived, and could misclassify browser logons. Update an older deployment if that matches the failure.
+Find `Error building authorization claims ... during ...` and read its exception. Windows can verify the person while the server's separate AD read fails, or a group pattern is invalid. Check the account and stage named in the log. Local accounts skip AD; classification uses Windows' `Local account` SID (`S-1-5-113`).
 
 **Browser prompts for Windows credentials repeatedly (401 loop).**
-Check the logs before entering credentials repeatedly. In older versions, an unregistered client or rejected redirect produced HTTP 401, which IIS could turn into another password challenge even after Windows sign-in succeeded. Current authorization-request checks return HTTP 400 (`invalid_request`) for those failures. Correct the client/redirect configuration if it is named in the log. Otherwise, confirm both IIS authentication features are enabled and the browser trusts the hostname and is offering valid credentials.
+Check the logs before entering credentials repeatedly. Confirm both IIS authentication features are enabled and the browser trusts the hostname and is offering valid credentials. An unregistered client or rejected redirect returns HTTP 400 (`invalid_request`); correct the client/redirect configuration if it is named in the log.
 
 **Tokens issued before a restart fail validation afterwards.**
 Fresh keys after a restart can no longer support earlier tokens/codes in the same way. Enable `IdentityServer:PersistKeys`, retain the same `DataPath` and key files, and check that the process account can read them. If persistence is already enabled, check whether deployment replaced the key directory or moved to another Windows machine. Changing the setting now preserves future keys; it cannot recover keys already lost. Tokens also expire normally, independently of restarts.

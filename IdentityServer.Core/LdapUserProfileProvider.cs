@@ -42,8 +42,7 @@ internal sealed class LdapUserProfileProvider : IUserProfileProvider
                 .Select(group => group.RequiredString("cn")).Distinct(StringComparer.Ordinal).ToArray()
             : Array.Empty<string>();
         // Search group.member directly: memberOf may include indirect memberships on FreeIPA.
-        // This also avoids AD's ranged memberOf attributes and excludes the AD primary group,
-        // matching the existing provider's direct-membership behavior.
+        // This also avoids AD's ranged memberOf attributes and excludes the AD primary group.
         return new()
         {
             Subject = subject, Username = username, AccountName = account,

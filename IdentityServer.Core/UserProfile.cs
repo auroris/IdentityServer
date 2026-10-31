@@ -27,7 +27,7 @@ public interface IUserProfileProvider
     UserProfile GetProfile(ClaimsPrincipal principal, bool includeGroups);
 }
 
-/// <summary>Preserves the existing Windows process-account lookup and local-account behavior.</summary>
+/// <summary>Resolves Windows domain accounts using process credentials and handles local accounts without directory access.</summary>
 [SupportedOSPlatform("windows")]
 internal sealed class WindowsUserProfileProvider : IUserProfileProvider
 {
