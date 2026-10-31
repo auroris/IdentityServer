@@ -42,7 +42,7 @@ is no user database to maintain and no password form: the operating system's Ker
 handler, or a Kerberos-aware Apache or Nginx in front, verifies the person, and the server
 reads their profile and group memberships from the directory to build the tokens.
 
-- **No new accounts.** People sign in with the domain account they already have. A browser
+- **No new accounts.** People sign in with the intranet domain account they already have. A browser
   that holds a Kerberos ticket signs in silently; nothing is typed into IdentityServer.
 - **Standard OpenID Connect.** Discovery, JWKS, authorization and token endpoints.
   Authorization code with PKCE is the recommended flow; implicit and hybrid are available
