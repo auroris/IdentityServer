@@ -4,7 +4,7 @@ Apache or Nginx can handle HTTPS and Kerberos authentication for IdentityServer 
 
 A Negotiate exchange is tied to one TCP connection. Completing the exchange at the proxy lets it pool backend connections while retaining its TLS, logging and routing features. A proxy that forwards the exchange to Kestrel must preserve one backend connection per client connection.
 
-Use the [Linux guide](linux-deployment.md) to prepare packages, keytabs, certificates and the systemd service, then configure proxy trust and routing below. The [validation record](validation-2026-10-31.md) lists the tested proxy and directory versions.
+Use the [Linux guide](linux-deployment.md) to prepare packages, keytabs, certificates and the systemd service, then configure proxy trust and routing below.
 
 You need one of these modules:
 

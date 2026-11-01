@@ -2,7 +2,7 @@
 
 Run IdentityServer on Linux to provide OpenID Connect sign-in through Microsoft AD, Samba AD or FreeIPA. The steps below use Ubuntu 26.04, systemd and a dedicated LDAP read account. On other distributions, use the equivalent packages and retain the file permissions shown here.
 
-Before you start, skim [How it works](how-it-works.md) for the three credentials involved. The [directory reference](kerberos-and-ldap.md) explains each setting, the [proxy guide](apache-and-nginx.md) covers Apache and Nginx in depth, and the [validation record](validation-2026-10-31.md) lists the versions this guide was tested against.
+Before you start, skim [How it works](how-it-works.md) for the three credentials involved. The [directory reference](kerberos-and-ldap.md) explains each setting, and the [proxy guide](apache-and-nginx.md) covers Apache and Nginx in depth.
 
 ## Contents
 
@@ -437,4 +437,4 @@ A one-time `kinit` is only a diagnostic: tickets expire. Before relying on this 
 | Empty roles | Request `roles`, set group regexes to common names, verify direct membership and restart after configuration edits. |
 | Codes stop working after restart | Preserve token keys and their password; verify `PersistKeys`, `DataPath` and ownership. Expired codes remain invalid even with persistent keys. |
 
-Use `journalctl -u identityserver`, `/opt/identityserver/logs/`, and the chosen proxy's error log. Do not share token-bearing authorization URLs, raw authentication traces, secret includes or key material. The [validation record](validation-2026-10-31.md) distinguishes observed fixes from deployment-specific configuration.
+Use `journalctl -u identityserver`, `/opt/identityserver/logs/`, and the chosen proxy's error log. Do not share token-bearing authorization URLs, raw authentication traces, secret includes or key material.

@@ -1,0 +1,170 @@
+name: Release
+
+run-name: Release ${{ inputs.version }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g. 1.2.3 or 1.2.3-rc.1; optional v prefix)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: pwsh
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  DOTNET_NOLOGO: '1'
+
+jobs:
+  prepare:
+    name: Validate version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate version and reject existing tags
+        id: version
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          $version = $env:RELEASE_VERSION
+          if ($version.StartsWith('v')) { $version = $version.Substring(1) }
+          $number = '(0|[1-9][0-9]*)'
+          $identifier = '(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
+          if ($version -cnotmatch "\A$number\.$number\.$number(-$identifier(\.$identifier)*)?\z") {
+            throw 'Use MAJOR.MINOR.PATCH, optionally followed by a prerelease such as -rc.1. Build metadata is not supported.'
+          }
+          foreach ($component in $version.Split('-', 2)[0].Split('.')) {
+            if ($component.Length -gt 5 -or [int]$component -gt 65534) {
+              throw '.NET assembly version components must be between 0 and 65534.'
+            }
+          }
+          $tag = "v$version"
+          $existingTag = git tag --list $tag
+          if ($LASTEXITCODE -ne 0) { throw 'Could not check existing tags.' }
+          if ($existingTag) { throw "Tag $tag already exists. Choose a new version." }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "prerelease=$($version.Contains('-').ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+
+  build:
+    name: Build and test (${{ matrix.runtime }})
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            runtime: win-x64
+          - os: ubuntu-latest
+            runtime: linux-x64
+    env:
+      RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+      RELEASE_RUNTIME: ${{ matrix.runtime }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Test
+        run: dotnet test IdentityServer.sln --configuration Release --filter 'Category!=LiveDirectory'
+
+      - name: Publish self-contained application
+        run: >-
+          dotnet publish IdentityServer.csproj
+          --configuration Release
+          --runtime "$env:RELEASE_RUNTIME"
+          --self-contained true
+          --output artifacts/publish
+          -p:Version="$env:RELEASE_VERSION"
+          -p:ContinuousIntegrationBuild=true
+
+      - name: Include deployment documentation and templates
+        run: |
+          Copy-Item -Path README.md, LICENSE -Destination artifacts/publish
+          Copy-Item -Path docs, deploy -Destination artifacts/publish -Recurse
+
+      - name: Package Windows
+        if: runner.os == 'Windows'
+        run: |
+          New-Item -ItemType Directory -Path artifacts/packages -Force | Out-Null
+          Compress-Archive -Path artifacts/publish/* -DestinationPath "artifacts/packages/IdentityServer-$env:RELEASE_VERSION-$env:RELEASE_RUNTIME.zip"
+
+      - name: Package Linux
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          mkdir -p artifacts/packages
+          chmod +x artifacts/publish/IdentityServer
+          tar -czf "artifacts/packages/IdentityServer-${RELEASE_VERSION}-${RELEASE_RUNTIME}.tar.gz" -C artifacts/publish .
+
+      - name: Upload release package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: package-${{ matrix.runtime }}
+          path: artifacts/packages/*
+          if-no-files-found: error
+          compression-level: 0
+
+  release:
+    name: Tag and publish release
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download release packages
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: package-*
+          path: artifacts/packages
+          merge-multiple: true
+
+      - name: Create checksums and release
+        shell: bash
+        working-directory: artifacts/packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+        run: |
+          windows="IdentityServer-${RELEASE_VERSION}-win-x64.zip"
+          linux="IdentityServer-${RELEASE_VERSION}-linux-x64.tar.gz"
+          test -s "$windows"
+          test -s "$linux"
+          sha256sum "$windows" "$linux" > SHA256SUMS.txt
+          # Creating the ref fails if another process has claimed this version during the build.
+          gh api --method POST "repos/$GH_REPO/git/refs" \
+            -f "ref=refs/tags/$RELEASE_TAG" -f "sha=$GITHUB_SHA" > /dev/null
+          args=(--verify-tag --title "$RELEASE_TAG" --generate-notes)
+          if [[ "$RELEASE_PRERELEASE" == "true" ]]; then
+            args+=(--prerelease)
+          fi
+          # gh uploads all assets before publishing the release.
+          gh release create "$RELEASE_TAG" "$windows" "$linux" SHA256SUMS.txt "${args[@]}"

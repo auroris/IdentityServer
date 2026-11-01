@@ -68,8 +68,7 @@ their profile and group memberships from the directory and issues tokens to the 
 
 ## Supported configurations
 
-Choose the row that matches your environment. Each row was exercised end to end with
-browser sign-in on 2026-10-31; see the [validation record](docs/validation-2026-10-31.md).
+Choose the row that matches your environment.
 
 | Host | Who authenticates the browser | Directory | Guide |
 |---|---|---|---|
@@ -80,7 +79,6 @@ browser sign-in on 2026-10-31; see the [validation record](docs/validation-2026-
 | Linux, Nginx | The SPNEGO module, then a trusted proxy header | Active Directory, Samba AD or FreeIPA | [Linux](docs/linux-deployment.md), [Apache and Nginx](docs/apache-and-nginx.md) |
 
 A Windows host can also read Samba AD or FreeIPA through the same LDAP settings Linux uses.
-That path is covered by the automated tests but was not part of the browser validation.
 
 > [!WARNING]
 > Deploy IdentityServer on an intranet where browsers can reach a domain controller or IPA
@@ -131,7 +129,7 @@ Bundle for IIS) on the destination. Then follow the guide for your row in the ta
 | [Verification](docs/verification.md) | The checks to run on a new deployment, a sign-in walkthrough with oidcdebugger.com, and the automated and live test suites. |
 | [Troubleshooting](docs/troubleshooting.md) | Reading the logs stage by stage, and the known failure modes with their fixes. |
 | [Embedding the core](docs/embedding.md) | Hosting the sign-in endpoints inside your own ASP.NET Core application, and using the Active Directory wrapper library on its own. |
-| [Validation record](docs/validation-2026-10-31.md) | What was tested against real AD, Samba AD and FreeIPA servers, the versions involved, and the fixes that came out of it. |
+| [Creating a release](docs/releasing.md) | Running the manual GitHub workflow to version, tag and publish Windows and Linux packages. |
 
 Ready-to-adapt deployment templates live in [`deploy/`](deploy/): settings and systemd
 units for native Kestrel and for a proxy backend, plus Apache and Nginx site files.

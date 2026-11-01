@@ -4,7 +4,7 @@ A domain-joined Windows Server can use IIS Windows Authentication for browser si
 the application pool's account to read Active Directory. IdentityServer uses the server's
 domain membership to discover the directory and authenticate those reads.
 
-This deployment requires administrative access to IIS and Active Directory.
+This deployment requires administrative access to IIS and maybe Active Directory.
 
 ## Contents
 
