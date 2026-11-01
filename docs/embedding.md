@@ -13,7 +13,19 @@ same Kerberos sign-in. The `ActiveDirectory` wrapper library can also be used on
 
 ## Reference the core
 
-For a .NET 10 web project in a folder beside the IdentityServer checkout:
+Install the NuGet package in your .NET 10 ASP.NET Core application:
+
+```shell
+dotnet add package AurorisNet.IdentityServer
+```
+
+This installs `IdentityServer.Core.dll` and its `AurorisNet.ActiveDirectory` dependency.
+The namespace remains `IdentityServer`; the Program and Startup examples below work with
+either a package reference or a project reference. Package versions follow the repository's
+release versions. See [Creating a release](releasing.md#nugetorg-trusted-publishing) for publishing.
+
+For development against a checkout, use a project reference instead. For a web project
+in a folder beside the IdentityServer checkout:
 
 ```xml
 <Project Sdk="Microsoft.NET.Sdk.Web">
@@ -106,7 +118,8 @@ Configure hosts, clients, groups, keys and directory access in your application'
 
 `ActiveDirectory/ActiveDirectory.csproj` wraps `System.DirectoryServices` with `ADUser`,
 `ADGroup`, `ADComputer`, `ADPrinter` and a `DirectorySearch` helper. It is Windows-only and
-is what the Windows directory provider uses. Reference it on its own with:
+is what the Windows directory provider uses. Install it independently with
+`dotnet add package AurorisNet.ActiveDirectory`, or reference the checkout with:
 
 ```xml
 <PropertyGroup>

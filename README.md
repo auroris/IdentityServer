@@ -129,7 +129,7 @@ Bundle for IIS) on the destination. Then follow the guide for your row in the ta
 | [Verification](docs/verification.md) | The checks to run on a new deployment, a sign-in walkthrough with oidcdebugger.com, and the automated and live test suites. |
 | [Troubleshooting](docs/troubleshooting.md) | Reading the logs stage by stage, and the known failure modes with their fixes. |
 | [Embedding the core](docs/embedding.md) | Hosting the sign-in endpoints inside your own ASP.NET Core application, and using the Active Directory wrapper library on its own. |
-| [Creating a release](docs/releasing.md) | Running the manual GitHub workflow to version, tag and publish Windows and Linux packages. |
+| [Creating a release](docs/releasing.md) | Versioning and publishing Windows/Linux releases and the embeddable NuGet packages with Trusted Publishing. |
 
 Ready-to-adapt deployment templates live in [`deploy/`](deploy/): settings and systemd
 units for native Kestrel and for a proxy backend, plus Apache and Nginx site files.

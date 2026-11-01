@@ -3,6 +3,18 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <RootNamespace>IdentityServer</RootNamespace>
+    <IsPackable>true</IsPackable>
+    <PackageId>AurorisNet.IdentityServer</PackageId>
+    <Authors>AurorisNet</Authors>
+    <Description>Embeddable OpenID Connect server for ASP.NET Core, backed by Active Directory, Samba AD or FreeIPA.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageProjectUrl>https://github.com/auroris/IdentityServer</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/auroris/IdentityServer</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
   </PropertyGroup>
 
   <ItemGroup>
@@ -20,5 +32,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="IdentityServer.Tests" />
+    <!-- Ship this project's NuGet-specific README, separate from the repository overview. -->
+    <None Update="README.md" Pack="true" PackagePath="/" />
   </ItemGroup>
 </Project>

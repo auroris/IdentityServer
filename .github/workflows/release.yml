@@ -130,9 +130,45 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
+  pack:
+    name: Pack embeddable libraries
+    needs: prepare
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Pack Active Directory dependency
+        run: >-
+          dotnet pack ActiveDirectory/ActiveDirectory.csproj
+          --configuration Release --output artifacts/nuget
+          -p:Version="$env:RELEASE_VERSION" -p:ContinuousIntegrationBuild=true
+
+      - name: Pack IdentityServer
+        run: >-
+          dotnet pack IdentityServer.Core/IdentityServer.Core.csproj
+          --configuration Release --output artifacts/nuget
+          -p:Version="$env:RELEASE_VERSION" -p:ContinuousIntegrationBuild=true
+
+      - name: Upload NuGet packages
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: nuget-packages
+          path: artifacts/nuget/*
+          if-no-files-found: error
+          compression-level: 0
+
   release:
     name: Tag and publish release
-    needs: [prepare, build]
+    needs: [prepare, build, pack]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -143,6 +179,12 @@ jobs:
           pattern: package-*
           path: artifacts/packages
           merge-multiple: true
+
+      - name: Download NuGet packages
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: nuget-packages
+          path: artifacts/packages
 
       - name: Create checksums and release
         shell: bash
@@ -156,9 +198,14 @@ jobs:
         run: |
           windows="IdentityServer-${RELEASE_VERSION}-win-x64.zip"
           linux="IdentityServer-${RELEASE_VERSION}-linux-x64.tar.gz"
-          test -s "$windows"
-          test -s "$linux"
-          sha256sum "$windows" "$linux" > SHA256SUMS.txt
+          files=("$windows" "$linux")
+          for package in AurorisNet.ActiveDirectory AurorisNet.IdentityServer; do
+            files+=("${package}.${RELEASE_VERSION}.nupkg" "${package}.${RELEASE_VERSION}.snupkg")
+          done
+          for file in "${files[@]}"; do
+            test -s "$file"
+          done
+          sha256sum "${files[@]}" > SHA256SUMS.txt
           # Creating the ref fails if another process has claimed this version during the build.
           gh api --method POST "repos/$GH_REPO/git/refs" \
             -f "ref=refs/tags/$RELEASE_TAG" -f "sha=$GITHUB_SHA" > /dev/null
@@ -167,4 +214,47 @@ jobs:
             args+=(--prerelease)
           fi
           # gh uploads all assets before publishing the release.
-          gh release create "$RELEASE_TAG" "$windows" "$linux" SHA256SUMS.txt "${args[@]}"
+          gh release create "$RELEASE_TAG" "${files[@]}" SHA256SUMS.txt "${args[@]}"
+
+  publish-nuget:
+    name: Publish to NuGet.org
+    needs: [prepare, release]
+    if: github.repository == 'auroris/IdentityServer' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+    steps:
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Download NuGet packages
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: nuget-packages
+          path: artifacts/nuget
+
+      - name: Log in to NuGet.org with OIDC
+        id: nuget-login
+        uses: NuGet/login@ebc737b6fc418a6ca0073cf116ec8dc156d8b81e # v1
+        with:
+          user: AurorisNet
+
+      - name: Publish Active Directory dependency and symbols
+        env:
+          NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
+        run: >-
+          dotnet nuget push "artifacts/nuget/AurorisNet.ActiveDirectory.$env:RELEASE_VERSION.nupkg"
+          --api-key "$env:NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
+          --skip-duplicate
+
+      - name: Publish IdentityServer and symbols
+        env:
+          NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
+        run: >-
+          dotnet nuget push "artifacts/nuget/AurorisNet.IdentityServer.$env:RELEASE_VERSION.nupkg"
+          --api-key "$env:NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
+          --skip-duplicate
