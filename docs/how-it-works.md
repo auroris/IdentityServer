@@ -1,8 +1,7 @@
 # How it works
 
-This page explains what happens during a sign-in, which credentials are involved, and
-where IdentityServer stops and your application takes over. Read it once before deploying;
-the platform guides assume these ideas.
+IdentityServer authenticates users through their directory and issues OpenID Connect
+tokens to your application. The application uses those tokens to establish a session.
 
 ## The words you will meet
 
@@ -35,39 +34,41 @@ the platform guides assume these ideas.
    confidential client, its secret. It receives an ID token and an access token, checks
    them, and starts its own session.
 
-From then on the application owns the session. IdentityServer keeps no record of who is
-signed in and has no sign-out page; the application decides when to send the browser back
-for a fresh token.
+The application manages its session, handles sign-out, and decides when to send the browser
+back for fresh tokens. IdentityServer maintains no sign-in session or sign-out endpoint.
 
 ## Three separate credentials
 
-It helps to keep these apart when something fails, because each one can be wrong on its own.
+Browser authentication, directory access and token protection each use a separate credential.
 
 | Credential | Who holds it | What it is for |
 |---|---|---|
 | The person's Kerberos ticket | The browser | Proves who is at the keyboard. On Linux the server, or the proxy, needs an HTTP service keytab to accept it. |
 | The directory read credential | IdentityServer | Reads profiles and groups. On a domain-joined Windows host this is the service account. Elsewhere it is a dedicated read account, or a Kerberos credential cache the service keeps renewed. |
-| The token keys | IdentityServer | The signing key lets applications verify tokens; the encryption key protects authorization codes. Persist them so a restart does not invalidate outstanding tokens. |
+| The token keys | IdentityServer | The signing key lets applications verify tokens; the encryption key protects authorization codes. Persist them to keep outstanding tokens usable across restarts. |
 
-A successful browser sign-in therefore does not prove that the server can read the
-directory, and a working directory read does not prove the keys will survive a restart.
-The [verification guide](verification.md) checks each one separately.
+Verify each credential separately: complete browser authentication, read a directory profile,
+and redeem an unexpired code after a restart. The [verification guide](verification.md)
+gives the steps.
 
 Proxy hosting adds a fourth item: a shared secret that lets the backend trust the identity
 header the proxy sends. The [Apache and Nginx guide](apache-and-nginx.md) explains how that
 trust is established.
 
-## What the server stores, and what it does not
+<a id="what-the-server-stores-and-what-it-does-not"></a>
 
-- **Keys.** With `PersistKeys` enabled, two key files under `DataPath`. Nothing else is
-  written except logs.
-- **No user database.** Profiles are read from the directory on every sign-in. A group
-  change takes effect on the next sign-in, not on tokens already issued.
-- **No token store.** The server runs OpenIddict in its store-free "degraded" mode. Codes and
-  tokens are self-contained, so there is no revocation list; choose lifetimes accordingly.
-  Authorization codes are short-lived and protected by PKCE.
-- **No refresh tokens.** When a token expires the application starts a new sign-in, which is
-  silent for a browser with a ticket.
+## Storage and token lifecycle
+
+- **Persisted keys.** With `PersistKeys` enabled, the server writes two key files under
+  `DataPath`. These files and the logs make up its stored data.
+- **Directory profiles.** Each sign-in reads the user's current profile and, when the
+  client requests roles, direct groups. Group changes take effect at the next sign-in;
+  previously issued tokens retain their claims.
+- **Self-contained codes and tokens.** OpenIddict runs in its store-free "degraded" mode.
+  There is no revocation list, so choose lifetimes to limit how long issued tokens remain
+  usable. Keep authorization codes short-lived and configure clients to use PKCE.
+- **Fresh tokens through sign-in.** When a token expires, the application starts a new
+  sign-in, which is silent for a browser with a ticket. Refresh tokens are not supported.
 
 ## Where authentication happens inside the server
 
@@ -83,11 +84,10 @@ Two kinds of request arrive, and they are protected differently.
   credential prompt.
 
 With native authentication, the first response to an authorization request is a `401` with
-`WWW-Authenticate: Negotiate`. That is the browser being asked for a ticket, not an error.
+`WWW-Authenticate: Negotiate`. This challenge asks the browser for a ticket.
 The browser repeats the request with the ticket over HTTP/1.1 and the exchange completes.
-Behind Apache or Nginx the proxy does this exchange, and the backend never issues a
-Negotiate challenge of its own; a request that reaches it without a verified principal gets
-a `403`.
+Behind Apache or Nginx the proxy performs the exchange. The backend requires the verified
+principal from the proxy and returns `403` when it is missing.
 
 ## Trade-offs to know about
 
@@ -99,5 +99,4 @@ a `403`.
 - Browsers must be configured to trust the identity hostname for integrated authentication.
   Chrome, Edge and Firefox each have a policy or preference for this; the platform guides
   show where.
-- Each sign-in opens a fresh connection to the directory. That is deliberate: it keeps the
-  server free of long-lived connection state that could go stale.
+- Each sign-in opens a fresh directory connection and closes it after the lookup.

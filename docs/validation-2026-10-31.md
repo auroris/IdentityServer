@@ -1,6 +1,8 @@
-# Live directory and browser validation — 2026-10-31
+<a id="live-directory-and-browser-validation--2026-10-31"></a>
 
-The VM tests exercised Microsoft AD, Samba AD and FreeIPA with real Kerberos, LDAP and browser authorization-code flows. All final exercised checks passed after the changes below. This is a dated compatibility record; use the [Linux deployment guide](linux-deployment.md) for installation and recheck your own deployment.
+# Live directory and browser validation: 2026-10-31
+
+VM tests exercised Microsoft AD, Samba AD and FreeIPA with Kerberos, LDAP and browser authorization-code flows. All checks in the final run passed after the changes below. The results describe the environments and coverage recorded here. Use the [Linux deployment guide](linux-deployment.md) to install and verify your own deployment.
 
 ## Updates from the tests
 
@@ -32,7 +34,7 @@ These findings are covered in the [Kerberos/LDAP reference](kerberos-and-ldap.md
 | LDAP client | OpenLDAP 2.6.10, SASL GSSAPI libraries |
 | Browser automation | Headed Linux Chromium 156.0.8078.4, Playwright 1.64.1, Xvfb |
 
-The official FreeIPA image was `quay.io/freeipa/freeipa-server:almalinux-9`, digest `sha256:62bb88d7e4ffe4691c123d8cdaf3d8a65dae1d9bd8e1e6baf469ca6f18770980`. These versions record the experiment, not a requirement to pin future deployments to these exact patches.
+The official FreeIPA image was `quay.io/freeipa/freeipa-server:almalinux-9`, digest `sha256:62bb88d7e4ffe4691c123d8cdaf3d8a65dae1d9bd8e1e6baf469ca6f18770980`. These versions identify the tested environment. Validate the versions chosen for your deployment.
 
 The checkpoint VMs hosted temporary test accounts, direct/nested groups, test CAs, service keytabs and isolated directory realms. Each application instance selected one provider/realm. Directory trust relationships were not configured.
 
@@ -65,7 +67,7 @@ Both Samba and FreeIPA passed these configurations with actual directory account
 | LDAPS | Passed for both providers | Passed for both providers |
 | StartTLS | Passed for both providers | Passed for both providers |
 
-That is **8 positive LDAP configurations**. Each checked profile reads with/without groups, a stable independent subject and an expected direct group. Both directories rejected an untrusted CA over LDAPS and StartTLS: **4 expected certificate rejections**.
+These **8 positive LDAP configurations** each checked profile reads both with groups and with the group query omitted. They verified the subject against an independently obtained value and checked an expected direct group. Both directories rejected an untrusted CA over LDAPS and StartTLS, giving **4 expected certificate rejections**.
 
 The earlier AD phase also verified spoofed identity/forwarding-header rejection, anonymous discovery/JWKS, correct public URLs/prefixes, distinct users over reused connections, and persisted key continuity. After service restarts/IIS recycling, signing JWKS remained unchanged and still-valid pre-restart authorization codes redeemed successfully across the four AD hosting modes. That restart/code-continuity matrix was not repeated for Samba/FreeIPA.
 
@@ -81,6 +83,6 @@ During the documentation follow-up, the new native settings and systemd template
 
 ## Evidence and limits
 
-The local ignored artifact directories are `artifacts/vm-validation/20261031-2109/` and `artifacts/vm-validation/20261031-expanded/`. They contain reports, JSON results, TRX files, screenshots and fixture scripts. They are not shipped in a normal clone or application publish. This repository document preserves the outcome when those artifacts or VM checkpoints are removed. Fixture passwords, keytabs and raw authentication logs are not part of the repository documentation.
+The local ignored artifact directories are `artifacts/vm-validation/20261031-2109/` and `artifacts/vm-validation/20261031-expanded/`. They contain reports, JSON results, TRX files, screenshots and fixture scripts retained on the validation host. This document preserves the outcome for repository readers after the artifacts or VM checkpoints are removed. Fixture passwords, keytabs and raw authentication logs remain outside the repository documentation.
 
-The earlier report's Samba/FreeIPA/browser exclusions were resolved by the expanded run recorded here. Browser coverage is limited to the stated Linux Chromium version; Windows-native browsers, Firefox/Safari, cross-realm trusts and production load were not exercised. The fixture scripts configure a disposable test environment and are not general-purpose production installers.
+The expanded run added Samba AD, FreeIPA and browser coverage to the earlier AD results. Browser coverage is limited to the stated Linux Chromium version; Windows-native browsers, Firefox/Safari, cross-realm trusts and production load were not exercised. The fixture scripts configure the disposable test environment used for these checks.

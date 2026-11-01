@@ -84,8 +84,7 @@ public class Startup(IConfiguration configuration)
 ```
 
 `UseIdentityServer` adds routing, CORS, authentication and authorization; map your endpoints
-after it. The OpenID Connect endpoints are served by middleware, so no sign-in controller is
-needed.
+after it. The middleware serves the OpenID Connect endpoints.
 
 ## What your routes inherit
 
@@ -98,11 +97,10 @@ needed.
   in the proxy, and anonymous routes must clear the identity header. The
   [proxy guide](apache-and-nginx.md#root-hosting-and-stripped-prefixes) explains the pattern.
 - `IUserProfileProvider` is registered as a singleton and can be replaced to supply profiles
-  from another source; the tests do exactly that.
+  from another source, as the integration tests do.
 
-Your application supplies its own `appsettings.json`. Nothing is inherited from the
-standalone host's file: configure hosts, clients, groups, keys and the directory yourself.
-Keep organisation-specific rules in your application rather than in the core.
+Configure hosts, clients, groups, keys and directory access in your application's own
+`appsettings.json`. Keep organisation-specific rules in your application.
 
 ## Using the Active Directory library alone
 
@@ -133,5 +131,5 @@ Notes for callers:
   path; a bare distinguished name is searched as an account name and fails. The other
   wrappers accept a bare distinguished name and prefix `LDAP://` themselves.
 
-The portable LDAP providers in the core do not use this library; they use
+The portable LDAP providers in the core use
 `System.DirectoryServices.Protocols`, which runs on both platforms.

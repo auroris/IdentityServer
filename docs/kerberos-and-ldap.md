@@ -1,12 +1,12 @@
 # Directory providers
 
-IdentityServer reads each person's profile and groups from one directory. This page explains
-how to choose the provider, what each `IdentityServer:Directory` setting does, how an
-authenticated name is matched to a directory account, and how the token keys are stored.
+IdentityServer reads each person's profile and groups through a directory provider.
+Choose the provider for your directory and host platform, then configure its connection
+under `IdentityServer:Directory`.
 
 For the installation steps on Linux, follow the [Linux guide](linux-deployment.md). On a
-domain-joined Windows server you normally need nothing from this page beyond the first
-section.
+domain-joined Windows server, the default `Windows` provider uses the service account and
+automatic domain discovery.
 
 ## Contents
 
@@ -25,14 +25,14 @@ section.
 
 | Provider | Use it when | How it reads |
 |---|---|---|
-| `Windows` | The server is domain-joined Windows and you want zero directory configuration | `System.DirectoryServices` as the service account, with automatic domain discovery. Also handles local machine accounts. |
+| `Windows` | Use the Windows server's domain membership and service account | `System.DirectoryServices` as the service account, with automatic domain discovery. Also handles local machine accounts. |
 | `ActiveDirectory` | Microsoft AD from Linux, or from Windows with an explicit server and read account | LDAP with the AD schema |
 | `SambaAd` | A Samba AD domain controller | LDAP with the AD schema |
 | `FreeIpa` | A FreeIPA realm | LDAP with the FreeIPA schema |
-| `Auto` (default) | | `Windows` on Windows when no `Server` is set; otherwise `ActiveDirectory`. FreeIPA is never chosen automatically. |
+| `Auto` (default) | | `Windows` on Windows when no `Server` is set; otherwise `ActiveDirectory`. Select `FreeIpa` explicitly for a FreeIPA realm. |
 
 Values are case-insensitive. The provider is fixed at startup and logged. A directory
-failure at run time never switches provider; it fails that sign-in.
+failure at run time fails that sign-in.
 
 The `Windows` provider accepts no other `Directory` settings and cannot run on Linux. The
 other three need the settings below.
@@ -48,7 +48,7 @@ other three need the settings below.
 | `Kerberos` | Kerberos only. NTLM and anything that cannot prove its protocol is refused, for sign-in and for protected application routes alike, including identities IIS supplies. |
 | `ProxyKerberos` | A Kerberos-authenticating Apache or Nginx verifies the browser and passes the principal to the backend under the trust rules in the [proxy guide](apache-and-nginx.md). Requires an LDAP provider; proxy identities carry no SID. |
 
-`Auto` never accepts proxy headers; `ProxyKerberos` must be chosen deliberately.
+Select `ProxyKerberos` explicitly to accept proxy-authenticated identities.
 
 ## Settings for AD, Samba AD and FreeIPA
 
@@ -84,8 +84,8 @@ FreeIPA:
 }
 ```
 
-Use `ActiveDirectory` with the Samba shape for Microsoft AD. Supply the password as
-`IdentityServer__Directory__BindPassword`.
+For Microsoft AD, use the Samba example with `Provider` set to `ActiveDirectory`.
+Supply the password as `IdentityServer__Directory__BindPassword`.
 
 | Setting | Meaning |
 |---|---|
@@ -94,7 +94,7 @@ Use `ActiveDirectory` with the Samba shape for Microsoft AD. Supply the password
 | `BaseDn` | Required. The directory suffix searched for users and groups. Referral chasing is off. |
 | `UserBaseDn` | Optional. Narrows the user search. Defaults to `BaseDn` for AD and Samba, `cn=users,cn=accounts,<BaseDn>` for FreeIPA. |
 | `GroupBaseDn` | Optional. Narrows the group search. Defaults to `BaseDn` for AD and Samba, `cn=groups,cn=accounts,<BaseDn>` for FreeIPA. |
-| `NetbiosDomain` | Optional, AD and Samba only. The short domain name such as `EXAMPLE`. Lets a `EXAMPLE\user` identity be looked up when it has no SID, and formats the account-name claim as `EXAMPLE\user`. |
+| `NetbiosDomain` | Optional, AD and Samba only. The short domain name such as `EXAMPLE`. Lets an `EXAMPLE\user` identity be looked up when it has no SID, and formats the account-name claim as `EXAMPLE\user`. |
 | `BindDn`, `BindPassword` | Set both to read as a dedicated account, or neither to use the process's own Kerberos credentials. The name can be a DN or, on AD and Samba, a user principal name. |
 | `TimeoutSeconds` | Per-request LDAP timeout. Default 10, range 1 to 120. |
 
@@ -108,23 +108,21 @@ is the recommended arrangement: one dedicated account with read access to users 
 rotated like any other service password. Do not use a domain administrator or FreeIPA's
 Directory Manager.
 
-**Without them** the server binds with its own Kerberos credentials: integrated
-authentication on Windows, SASL GSSAPI from the process's credential cache on Linux. The
-HTTP keytab that accepts browser tickets does **not** provide those credentials; on Linux
-you must keep a separate credential cache renewed, as described in the
+**With both bind settings omitted,** the server binds with its own Kerberos credentials.
+Windows uses integrated authentication. Linux uses SASL GSSAPI with a credential cache
+maintained for the directory read account. Keep that cache renewed as described in the
 [Linux guide](linux-deployment.md#optional-kerberos-credentials-for-outbound-ldap). Against
 Samba over TLS, the tested OpenLDAP client also needed `LDAPSASL_CBINDING=tls-endpoint` and
 `LDAPSASL_SECPROPS=maxssf=0` in the service environment.
 
 **Certificates** are validated by the operating system's trust store, and on Linux by
-OpenLDAP's. There is no switch to skip validation; install the issuing CA instead.
+OpenLDAP's. Install the issuing CA in the relevant trust store.
 
 **StartTLS on Linux** first opens an anonymous session, upgrades it to TLS, and only then
-attaches credentials. If the upgrade is refused the connection is closed and no credentials
-are sent. Use LDAPS if the directory rejects even an anonymous session.
+attaches credentials. A refused upgrade closes the connection before credentials are sent.
+Use LDAPS if the directory rejects anonymous sessions.
 
-Each sign-in opens, uses and closes its own connection. There is no connection pool to go
-stale.
+Each sign-in opens a directory connection and closes it after the lookup.
 
 ## How a person is matched to an account
 
@@ -134,13 +132,13 @@ Windows as `EXAMPLE\alice` with a SID.
 | Provider | Match |
 |---|---|
 | AD and Samba, with a SID | By `objectSid`. Unambiguous, even across trusts. |
-| AD and Samba, by name | The realm must equal `Realm`. Then `userPrincipalName` equals the full principal, or `sAMAccountName` equals the part before `@`, within `UserBaseDn`. A `EXAMPLE\alice` name needs `NetbiosDomain`. |
+| AD and Samba, by name | The realm must equal `Realm`. Then `userPrincipalName` equals the full principal, or `sAMAccountName` equals the part before `@`, within `UserBaseDn`. An `EXAMPLE\alice` name needs `NetbiosDomain`. |
 | FreeIPA | The realm must equal `Realm`. Then `krbPrincipalName` equals the full principal within `UserBaseDn`. |
 
-Exactly one account must match. None, or more than one, is refused. Unqualified names and
-service principals are refused. All of these are reported to the application as
-`access_denied` with a warning in the log; connection, certificate and bind failures are
-reported as `server_error` with an error in the log.
+Exactly one account must match. Missing or ambiguous matches, unqualified names and service
+principals are reported to the application as `access_denied` with a warning in the log.
+Connection, certificate and bind failures are reported as `server_error` with an error in
+the log.
 
 The subject claim is the account's `objectSid` on AD and Samba, or `ipaUniqueID` on
 FreeIPA, so it survives renames. The account-name claim is the authenticated principal, or
@@ -159,7 +157,7 @@ The group search runs only when the application requests the `roles` scope.
 
 ## Persistent token keys
 
-Set `IdentityServer:PersistKeys` to `true` on every real deployment and choose an absolute
+Set `IdentityServer:PersistKeys` to `true` on every production deployment and choose an absolute
 `IdentityServer:DataPath` the service can write.
 
 - **Linux** requires `IdentityServer__KeyProtectionPassword`. The keys are stored as
@@ -170,8 +168,8 @@ Set `IdentityServer:PersistKeys` to `true` on every real deployment and choose a
   `encryption-key.bin`, readable only on the machine that created them. With a password it
   behaves like Linux.
 
-The server never replaces a key it cannot read. A wrong password, a damaged file or a key in
-the other format stops startup. Token keys are unrelated to the HTTPS certificate.
+A wrong password, a damaged file or a key in the other format stops startup and leaves the
+existing key files intact. Manage these token keys separately from the HTTPS certificate.
 
 ## Checking a provider
 

@@ -1,9 +1,8 @@
 # Troubleshooting
 
-Start with the log. Every sign-in passes through the same stages, and the first stage that
-fails tells you which of the [three credentials](how-it-works.md#three-separate-credentials)
-to look at. Fixing a later stage never repairs an earlier one: a client secret will not fix
-a browser that cannot get a ticket, and a browser setting will not fix a directory read.
+Find the first failed stage in the sign-in log. Use it to identify the relevant settings
+and [credential](how-it-works.md#three-separate-credentials): the browser's Kerberos ticket,
+the server's directory read credential, or the token keys.
 
 Linux-specific problems with Kerberos, keytabs, LDAP TLS, systemd and the proxies are in the
 [Linux troubleshooting table](linux-deployment.md#troubleshooting). This page covers the
@@ -23,7 +22,7 @@ Logs go to the console and to `logs/identityserver-YYYYMMDD.log` under the worki
 directory. Startup lines state the resolved authentication mode and provider, the issuer,
 the allowed hosts, whether keys persist, and whether any group patterns are configured.
 
-For more detail, raise this project's level without touching the framework's:
+For more detail, enable Debug logging for IdentityServer:
 
 ```powershell
 dotnet run --project IdentityServer.csproj --no-launch-profile -- --urls http://localhost:5000 --Serilog:MinimumLevel:Override:IdentityServer=Debug
@@ -36,15 +35,15 @@ Messages in the order a sign-in produces them:
 
 | Message | What it means |
 |---|---|
-| `Authorization request rejected` | The `client_id` or the callback host was not accepted. The message names which. Fix `Clients` or `Hosts`; nothing about the person is involved yet. |
+| `Authorization request rejected` | The `client_id` or callback host failed validation. The message identifies which setting to correct in `Clients` or `Hosts`. |
 | `Issuing Negotiate challenge` | The server asked the browser for a ticket. One of these per sign-in is normal. Many in a row with nothing after them means the browser is not completing the exchange. |
-| `Reading directory profile` | The browser authenticated. Anything that goes wrong after this is the directory read: provider, realm, connectivity, certificate trust or the read credential. |
+| `Reading directory profile` | Browser authentication succeeded and the directory read is starting. For a failure at this stage, check the provider, realm, connectivity, certificate trust and read credential. |
 | `Built claims for ...` (Debug) | How many direct groups were found and how many matched the patterns. Zero matches is a valid result. |
 | `Authorization claims prepared` | Identity and claims are ready; OpenIddict builds the response. The application has not necessarily received anything yet. |
 | `Authorization denied for user ... during ...` | A warning. The person authenticated, but directory policy refused them: wrong realm, an unqualified name, no or several matching accounts, or a missing SID or `ipaUniqueID`. The application receives `access_denied`. |
 | `Error building authorization claims ... during ...` | An error with an exception. The stage says where. Usually connectivity, TLS trust, a bind failure or an invalid group pattern. The application receives `server_error`. |
-| `Token request rejected` | The application's code exchange failed its own authentication: wrong `client_id` or `client_secret`. Not related to the person's password. |
-| `Token endpoint response sizes` (Debug) | Token lengths, to diagnose oversized headers. Values are never logged. |
+| `Token request rejected` | The application's code exchange failed authentication. Check its `client_id` and `client_secret`. |
+| `Token endpoint response sizes` (Debug) | Token lengths, to diagnose oversized headers. |
 
 ## Startup problems
 
@@ -52,11 +51,11 @@ Messages in the order a sign-in produces them:
 The message names the key. Common causes: `Directory:Server` missing on Linux, `BindDn`
 without `BindPassword` or the reverse, `PersistKeys` on Linux without
 `KeyProtectionPassword`, a misspelled `Provider` or `Mode`, or `ProxyKerberos` without
-`ReverseProxy` settings. Nothing falls back to a default; fix the setting.
+`ReverseProxy` settings. Correct the named setting and restart the service.
 
 **Startup fails reading a key file.**
 The password is wrong, the file is damaged, or a key exists in the other format (`.bin`
-versus `.pem`). The server never overwrites a key. Restore the matching password or file;
+versus `.pem`). Startup leaves existing keys intact. Restore the matching password or file;
 delete the keys only if you accept that outstanding tokens become invalid.
 
 **The published application fails before discovery loads.**
@@ -67,9 +66,9 @@ published, so a value that worked in development may be missing. Under IIS, read
 Windows Application event log when the process does not start at all.
 
 **The home page returns 404.**
-There is no home page. Open `/.well-known/openid-configuration`, including the application
-path if there is one. If that also returns 404, the port, IIS application path or published
-folder is wrong.
+The root URL returns 404. Open `/.well-known/openid-configuration`, including the
+application path if there is one. If that also returns 404, check the port, IIS application
+path and published folder.
 
 ## Browser authentication problems
 
@@ -83,9 +82,9 @@ the hostname for integrated authentication ([Windows](windows-iis.md#browser-tru
 HTTP/1.1 for the exchange, which browsers normally do on their own.
 
 **The browser shows a credential prompt instead of signing in silently.**
-The hostname is not trusted for integrated authentication. See [Browser trust](windows-iis.md#browser-trust)
-for Edge, Chrome and Firefox. Typing credentials into that prompt works, but the trust
-setting is still missing.
+Add the hostname to the browser's integrated-authentication trust settings. See
+[Browser trust](windows-iis.md#browser-trust) for Edge, Chrome and Firefox. Typing credentials
+into the prompt also completes sign-in.
 
 **The log says a domain user authenticated with NTLM, not Kerberos.**
 Expected for local accounts. For a domain user it means no usable ticket: the SPN is
@@ -139,11 +138,11 @@ The client ID is not in `Clients`, or the callback's hostname is not in `Hosts`.
 names the failing check and the host.
 
 **The application receives a code but the token exchange fails.**
-The exchange must use the same `client_id`, the exact callback URL, the PKCE verifier that
-goes with that request and, for a confidential client, the right `client_secret`. A code
-from an earlier request, an expired code, or a restart with ephemeral keys in between all
-fail. If no token request appears in the log, the application never reached the server;
-look at its network errors and CORS settings.
+Use the `client_id`, exact callback URL and PKCE verifier from the authorization request.
+A confidential client also supplies its `client_secret`. The code must be unexpired and
+the server must still have the keys that protected it. A restart with ephemeral keys
+invalidates the code. If the log contains no token request, check the application's network
+errors and CORS settings.
 
 **Tokens issued before a restart fail afterwards.**
 The keys changed. Enable `PersistKeys`, keep `DataPath` and its files across deployments, and
@@ -157,10 +156,10 @@ Set `ServerUri` to the public address explicitly. Behind a proxy, also enable
 shows the public hostname.
 
 **An API cannot validate the access token.**
-Access tokens are encrypted, as OpenIddict does by default. A generic JWT validator that
-only has the public signing keys cannot read them; use OpenIddict validation or configure
-decryption. Do not send the ID token to the API as a workaround.
+Access tokens are encrypted, as OpenIddict does by default. Use OpenIddict validation or a
+validator configured with both the signing and decryption keys. An ID token identifies the
+user to the client application; the API requires an access token.
 
 **An application refuses the discovery document or tokens over plain HTTP.**
 Most OpenID Connect clients require HTTPS metadata and HTTPS for cross-site cookies. Deploy
-IdentityServer on HTTPS; the server's willingness to serve HTTP does not relax the client.
+IdentityServer on HTTPS to meet those requirements.

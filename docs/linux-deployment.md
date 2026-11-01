@@ -1,6 +1,6 @@
 # Running IdentityServer on Linux
 
-This guide takes a Linux host from a fresh install to a verified browser sign-in against Microsoft AD, Samba AD or FreeIPA. The commands are for Ubuntu 26.04 with systemd and use a dedicated LDAP read account; other distributions need the equivalent packages and the same file permissions. There is no database to set up and nothing to add to the directory schema.
+Run IdentityServer on Linux to provide OpenID Connect sign-in through Microsoft AD, Samba AD or FreeIPA. The steps below use Ubuntu 26.04, systemd and a dedicated LDAP read account. On other distributions, use the equivalent packages and retain the file permissions shown here.
 
 Before you start, skim [How it works](how-it-works.md) for the three credentials involved. The [directory reference](kerberos-and-ldap.md) explains each setting, the [proxy guide](apache-and-nginx.md) covers Apache and Nginx in depth, and the [validation record](validation-2026-10-31.md) lists the versions this guide was tested against.
 
@@ -44,9 +44,9 @@ Replace these example values consistently before running commands or installing 
 | Directory read account | `identityserver-reader` | Outbound LDAP only |
 | Client and callback | `example-app`, `https://app.example.com/signin-oidc` | Relying-party configuration |
 
-There are three independent credentials: the HTTP service keytab accepts browser tickets; the read account looks up profiles/groups; the key-protection password encrypts persisted token keys. Proxy hosting adds a fourth, shared proxy secret. A user's browser ticket does not grant the server an outbound LDAP credential cache.
+The HTTP service keytab accepts browser tickets, the read account retrieves profiles and groups, and the key-protection password encrypts persisted token keys. Proxy hosting also uses a shared secret to verify the proxy's identity.
 
-Use your existing directory infrastructure. IdentityServer does not install a DC, join a domain, enroll an IPA client, create accounts or register SPNs. A domain join is not required for the explicit keytab/read-account setup here, but domain DNS, Kerberos configuration and certificate trust are required. An existing join may already manage them; preserve that configuration.
+Start with a configured directory service and provision its accounts and SPNs through its administration tools. The keytab and read account support hosts both inside and outside the domain. Configure domain DNS, Kerberos and certificate trust on the host; preserve any settings already managed by a domain join or IPA enrollment.
 
 Allow these connections where applicable:
 
@@ -58,7 +58,7 @@ Allow these connections where applicable:
 | IdentityServer → directory | TCP 636 for LDAPS **or** TCP 389 for StartTLS | Profile/group reads |
 | Proxy → Kestrel on the same host | Loopback TCP 5080 | Restricted backend |
 
-Enrollment, password changes and administrative provisioning can require additional directory ports; the table covers normal sign-in/read traffic. Do not expose port 5080 remotely for the supplied setup.
+The table covers routine sign-in and directory reads. Enrollment, password changes and administrative provisioning can require additional directory ports. Keep backend port 5080 restricted to loopback for this setup.
 
 ## 2. Install the runtime and client libraries
 
@@ -72,7 +72,7 @@ dotnet --list-runtimes
 command -v dotnet
 ```
 
-Expect both `Microsoft.AspNetCore.App 10.0.x` and `Microsoft.NETCore.App 10.0.x`. Installing only `dotnet-runtime-10.0` does not provide ASP.NET Core. `ldap-utils` brings the OpenLDAP client library; the SASL GSSAPI package is needed for Kerberos LDAP binds. If the Kerberos installer prompts for a default realm, supply your realm.
+Confirm that `dotnet --list-runtimes` lists both `Microsoft.AspNetCore.App 10.0.x` and `Microsoft.NETCore.App 10.0.x`. The ASP.NET Core runtime package supplies both. `ldap-utils` supplies the OpenLDAP client library; the SASL GSSAPI package supports Kerberos LDAP binds. If the Kerberos installer prompts for a default realm, supply your realm.
 
 The service templates use `/usr/bin/dotnet`. Adjust `ExecStart` for another installation location. On a build machine, install the SDK instead: `sudo apt-get install dotnet-sdk-10.0`; the SDK includes the runtime. Follow [Microsoft's Ubuntu instructions](https://learn.microsoft.com/en-us/dotnet/core/install/linux-ubuntu-install) for another Ubuntu release or unavailable packages, and the [Linux distribution instructions](https://learn.microsoft.com/en-us/dotnet/core/install/linux) elsewhere.
 
@@ -85,7 +85,7 @@ sudo apt-get install -y apache2 libapache2-mod-auth-gssapi
 sudo apt-get install -y nginx libnginx-mod-http-auth-spnego
 ```
 
-The Nginx authentication module is an additional package, not a built-in directive of stock Nginx. Check the selected distribution's module availability before deploying.
+Nginx Kerberos authentication requires the additional SPNEGO module package. Check its availability for your distribution before deploying.
 
 ## 3. Configure DNS, time and Kerberos
 
@@ -97,7 +97,7 @@ timedatectl status
 dig +short SRV _kerberos._tcp.example.com
 ```
 
-Use the public FQDN in the browser, never the IP address or `localhost` for the identity endpoint. The client must request the same hostname that is in the keytab. Synchronize clocks with the domain's time source.
+Use the public FQDN in the browser so the client requests the hostname recorded in the keytab. Synchronize clocks with the domain's time source.
 
 For a small environment without usable Kerberos SRV records, merge this into `/etc/krb5.conf`, substituting `ipa.example.com` for a FreeIPA KDC. In an enrolled host, review the existing included configuration first.
 
@@ -120,7 +120,7 @@ For a small environment without usable Kerberos SRV records, merge this into `/e
  example.com = EXAMPLE.COM
 ```
 
-This explicit mapping avoids depending on discovery or aliases for the sample hostname. A deployment using directory-managed DNS can instead use its existing KDC discovery configuration. Add distinct realm mappings when several realms share a host; each IdentityServer instance still selects one directory/realm. See [MIT's Kerberos configuration reference](https://www.mit.edu/~kerberos/krb5-devel/doc/admin/conf_files/krb5_conf.html).
+This mapping assigns the sample hostname to a realm and KDC explicitly. A deployment using directory-managed DNS can use its existing KDC discovery configuration. Add distinct realm mappings when several realms share a host; each IdentityServer instance selects one directory and realm. See [MIT's Kerberos configuration reference](https://www.mit.edu/~kerberos/krb5-devel/doc/admin/conf_files/krb5_conf.html).
 
 ## 4. Provision the HTTP service keytab
 
@@ -137,7 +137,7 @@ setspn -S HTTP/identity.example.com EXAMPLE\svc-identityserver
 ktpass /out identityserver.http.keytab /princ HTTP/identity.example.com@EXAMPLE.COM /mapuser EXAMPLE\svc-identityserver /crypto AES256-SHA1 /ptype KRB5_NT_PRINCIPAL /pass *
 ```
 
-`/pass *` prompts rather than putting the password in shell history. `ktpass` can change account keys/mappings: use it for this dedicated identity and coordinate key rotation with every consumer. Preserve the exact principal spelling/case and securely transfer the resulting file to the Linux host. See [Microsoft's ktpass reference](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/ktpass) and [ASP.NET Core Kerberos setup](https://learn.microsoft.com/en-us/aspnet/core/security/authentication/windowsauth?view=aspnetcore-10.0#linux-and-macos-environment-configuration).
+`/pass *` prompts for the password, keeping it out of shell history. `ktpass` can change account keys and mappings: use it for this dedicated identity and coordinate key rotation with every consumer. Preserve the principal's exact spelling and case, then securely transfer the resulting file to the Linux host. See [Microsoft's ktpass reference](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/ktpass) and [ASP.NET Core Kerberos setup](https://learn.microsoft.com/en-us/aspnet/core/security/authentication/windowsauth?view=aspnetcore-10.0#linux-and-macos-environment-configuration).
 
 ### Samba AD
 
@@ -173,13 +173,13 @@ ipa-getkeytab -s ipa.example.com -p HTTP/identity.example.com \
 klist -kte ./identityserver.http.keytab
 ```
 
-If the host or service already exists, inspect it instead of adding it again. Normal `ipa-getkeytab` issuance changes service keys; do not independently regenerate the same principal on each frontend. Retrieve existing keys with `-r` only when the administrator has granted retrieval rights, or distribute the coordinated keytab securely. See [FreeIPA keytab retrieval](https://www.freeipa.org/page/V4/Keytab_Retrieval).
+If the host or service already exists, inspect its configuration before proceeding. Normal `ipa-getkeytab` issuance changes service keys, so coordinate the change across every frontend using the principal. Retrieve existing keys with `-r` only when the administrator has granted retrieval rights, or distribute the coordinated keytab securely. See [FreeIPA keytab retrieval](https://www.freeipa.org/page/V4/Keytab_Retrieval).
 
 For every provider, `klist -kte` should show `HTTP/identity.example.com@EXAMPLE.COM`, appropriate encryption types and the current key version. Do not use `klist -K`, which prints key material. Keep transferred keytabs outside the web root and source control.
 
 ## 5. Establish LDAP and HTTPS trust
 
-The directory needs a server certificate valid for the configured LDAP hostname and a working LDAPS or StartTLS listener. Enabling a port on IdentityServer cannot enable TLS on the directory server. Obtain the issuing CA certificate through your organization's trusted channel, then on Ubuntu:
+Configure a working LDAPS or StartTLS listener on the directory server, with a certificate valid for its LDAP hostname. Obtain the issuing CA certificate through your organization's trusted channel, then install and check it on Ubuntu:
 
 ```bash
 sudo install -m 0644 directory-ca.crt /usr/local/share/ca-certificates/identityserver-directory-ca.crt
@@ -190,7 +190,7 @@ openssl s_client -connect dc.example.com:636 -servername dc.example.com \
 
 For StartTLS, use `-starttls ldap -connect dc.example.com:389` in the last command. Substitute `ipa.example.com` for FreeIPA. A trusted chain alone is insufficient if the certificate names a different host. Use the distribution's CA trust mechanism on non-Ubuntu systems; OpenLDAP may also need its CA bundle configured in `/etc/ldap/ldap.conf` (or `/etc/openldap/ldap.conf`). Do not disable certificate verification.
 
-Separately, obtain an HTTPS certificate whose SAN includes `identity.example.com`, with its private key and intermediate chain. Browser clients must trust that issuer too. The native template uses PEM files; a PFX is another supported [Kestrel certificate configuration](https://learn.microsoft.com/en-us/aspnet/core/fundamentals/servers/kestrel/endpoints?view=aspnetcore-10.0). HTTPS certificates and Kerberos keytabs serve different protocols and cannot substitute for each other.
+Obtain an HTTPS certificate whose SAN includes `identity.example.com`, with its private key and intermediate chain. Browser clients must trust that issuer too. The native template uses PEM files; a PFX is another supported [Kestrel certificate configuration](https://learn.microsoft.com/en-us/aspnet/core/fundamentals/servers/kestrel/endpoints?view=aspnetcore-10.0). The certificate protects the HTTPS connection; the keytab lets the service verify Kerberos tickets.
 
 ## 6. Create the service account and publish files
 
@@ -204,7 +204,7 @@ sudo install -d -o identityserver -g identityserver -m 0700 /opt/identityserver/
 sudo install -d -o root -g identityserver -m 0750 /etc/identityserver
 ```
 
-If the account/directories already exist, verify their ownership rather than recreating them. The systemd unit creates `/var/lib/identityserver`, owned by the service, for persisted keys.
+For an existing account and directories, verify their ownership and permissions. The systemd unit creates `/var/lib/identityserver`, owned by the service, for persisted keys.
 
 On the build machine, from the checkout root:
 
@@ -226,7 +226,7 @@ sudo chmod 0700 /opt/identityserver/logs
 
 These are initial-install commands; use the [upgrade procedure](#upgrades-backups-and-rotation) for an existing service. Keep application binaries administrator-owned. The service needs read access to binaries/settings and write access only to its state/log locations.
 
-`deploy/` templates and `appsettings.Local.json` are excluded from publish output; transfer/install them separately. The standalone host loads `appsettings.json`, optional `appsettings.Local.json`, environment variables, then command-line settings, in that precedence order. It does **not** load `appsettings.Production.json` or user secrets. Restart after configuration changes. Replace configuration arrays completely: partially overriding `Hosts` or `Clients` can retain entries from earlier files.
+Transfer and install the `deploy/` templates and any `appsettings.Local.json` separately from the publish output. The standalone host loads `appsettings.json`, optional `appsettings.Local.json`, environment variables, then command-line settings, in that precedence order. It does not load `appsettings.Production.json` or user secrets. Restart after configuration changes. Replace configuration arrays completely: partially overriding `Hosts` or `Clients` can retain entries from earlier files.
 
 ## 7. Install the selected application configuration
 
@@ -245,7 +245,7 @@ sudo install -o root -g identityserver -m 0640 privkey.pem /etc/identityserver/t
 sudoedit /opt/identityserver/appsettings.json /etc/identityserver/identityserver.env
 ```
 
-The template explicitly selects `Kerberos`, listens on HTTPS port 8443 and sets `KRB5_KTNAME=FILE:/etc/identityserver/http.keytab` in the unit. It needs no privileged port capability. `ServerUri` must include `:8443`; `AllowedHosts` is the hostname without a port. To serve directly on 443, change both the listener and `ServerUri` and add `AmbientCapabilities=CAP_NET_BIND_SERVICE` and `CapabilityBoundingSet=CAP_NET_BIND_SERVICE` in a systemd service override. Do not run the application as root.
+The template selects `Kerberos`, listens on HTTPS port 8443 and sets `KRB5_KTNAME=FILE:/etc/identityserver/http.keytab` in the unit. `ServerUri` must include `:8443`; `AllowedHosts` takes the hostname alone. To serve directly on 443, change both the listener and `ServerUri` and add `AmbientCapabilities=CAP_NET_BIND_SERVICE` and `CapabilityBoundingSet=CAP_NET_BIND_SERVICE` in a systemd service override. These capabilities let the dedicated service account bind a privileged port.
 
 ### Apache or Nginx
 
@@ -256,7 +256,7 @@ sudo install -m 0600 deploy/identityserver.env.example /etc/identityserver/ident
 sudoedit /opt/identityserver/appsettings.json /etc/identityserver/identityserver.env
 ```
 
-Retain `ProxyKerberos`, the loopback backend, `KnownProxies: ["127.0.0.1"]`, and the matching `/IdentityServer` path in `ServerUri` and `PathBase`. Install the HTTP keytab for the **proxy's** user/group; it is not needed by this Kestrel process. On Ubuntu the proxy workers normally use `www-data`; verify the actual runtime account.
+Retain `ProxyKerberos`, the loopback backend, `KnownProxies: ["127.0.0.1"]`, and the matching `/IdentityServer` path in `ServerUri` and `PathBase`. Install the HTTP keytab with read access for the proxy's user and group, since the proxy authenticates browser tickets. On Ubuntu the proxy workers normally use `www-data`; verify the actual runtime account.
 
 Apache installation, after adapting the hostname and certificate paths in the copied site:
 
@@ -299,9 +299,9 @@ Edit the complete deployed `appsettings.json`, retaining the chosen hosting conf
 | `BaseDn` | `DC=example,DC=com` | `DC=example,DC=com` | `dc=example,dc=com` |
 | `BindDn` | Reader DN or `identityserver-reader@EXAMPLE.COM` | Reader DN or `identityserver-reader@EXAMPLE.COM` | `uid=identityserver-reader,cn=users,cn=accounts,dc=example,dc=com` |
 
-Create that read account through the directory's normal administration tools and grant the required profile/group read access. Use neither a domain administrator nor FreeIPA's Directory Manager. Complete any initial password change and account activation before using a newly created IPA user for binds. Plan reader password rotation rather than relying on an expiring interactive account.
+Create a dedicated read account through the directory's administration tools and grant the profile and group read permissions it needs. Complete any initial password change and account activation before using a newly created IPA user for binds. Set a service-account password policy and schedule password rotation with the corresponding application configuration change.
 
-FreeIPA defaults searches to its accounts user/group containers. AD/Samba use the configured suffix unless `UserBaseDn`/`GroupBaseDn` narrow it. For StartTLS, use `ldap://...` instead; TLS remains mandatory. Linux first opens an anonymous LDAP session to initialize the .NET connection, upgrades it to TLS, and only then supplies credentials. If anonymous binds themselves are forbidden, use LDAPS. A refused TLS upgrade never falls back to a plaintext credentialed bind.
+FreeIPA defaults searches to its accounts user and group containers. AD and Samba use the configured suffix unless `UserBaseDn` or `GroupBaseDn` narrows it. For StartTLS, use `ldap://...`; TLS remains mandatory. Linux first opens an anonymous LDAP session to initialize the .NET connection, upgrades it to TLS, and then supplies credentials. A refused upgrade closes the connection before credentials are sent. If the directory forbids anonymous binds, use LDAPS.
 
 Check the actual reader before starting the app (the command prompts for its password):
 
@@ -311,17 +311,17 @@ ldapsearch -LLL -x -H ldaps://dc.example.com \
   -b 'DC=example,DC=com' '(sAMAccountName=alice)' dn userPrincipalName objectSid mail
 ```
 
-For StartTLS add `-ZZ` and use `ldap://...`. For FreeIPA use its bind DN/server and search `-b 'cn=users,cn=accounts,dc=example,dc=com' '(uid=alice)' dn krbPrincipalName ipaUniqueID mail`. A base/root-DSE read alone does not prove that the reader can read the user's attributes and groups.
+For StartTLS add `-ZZ` and use `ldap://...`. For FreeIPA use its bind DN and server, and search `-b 'cn=users,cn=accounts,dc=example,dc=com' '(uid=alice)' dn krbPrincipalName ipaUniqueID mail`. Check access to the user attributes and groups that IdentityServer will read.
 
 ### Secrets, clients and groups
 
 Fill both native environment entries with nonempty values: `IdentityServer__Directory__BindPassword` is the actual reader password; `IdentityServer__KeyProtectionPassword` is an independent strong random value. Proxy hosting also requires `IdentityServer__Authentication__ProxySecret` (at least 32 non-whitespace characters). `openssl rand -base64 32` can generate each random secret independently.
 
-The environment file is read by systemd as root, not sourced by a shell: use literal `NAME=value` entries, no `export` or command substitution. Quote values containing whitespace using systemd's [EnvironmentFile syntax](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html#EnvironmentFile=). Keep it root-owned mode 0600; the application does not need direct file access. Preserve the key-protection password with the saved signing/encryption keys across restarts and deployments.
+systemd reads the environment file as root and passes its values to the service. Use literal `NAME=value` entries; shell `export` statements and command substitution are unsupported. Quote values containing whitespace using systemd's [EnvironmentFile syntax](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html#EnvironmentFile=). Keep the file root-owned with mode 0600. Preserve the key-protection password with the saved signing and encryption keys across restarts and deployments.
 
 Replace the example client, callback host and hostname restrictions. `IdentityServer:Hosts` accepts callback origins, but its redirect check matches **hostnames**, not exact callback paths, and is shared across clients. `AllowedHosts` restricts requests to the identity hostname. Configure the actual callback URL in the client. Keep an explicit `Clients` list; an absent list or wildcard allows unmatched client IDs. See the [configuration guide](configuration.md).
 
-`Groups: []` deliberately emits no roles. Add narrow common-name regexes such as `^MyApp Readers$` or `^myapp-readers$`, and have the client request `roles`. Only direct memberships are read: nested groups, AD primary-group membership and arbitrary proxy-provided roles are not expanded/copied. AD/Samba subjects are SIDs; FreeIPA subjects are `ipaUniqueID` values.
+To issue role claims, populate the initially empty `Groups` list with narrow common-name regexes such as `^MyApp Readers$` or `^myapp-readers$`, and have the client request `roles`. Roles come from direct directory memberships; nested groups, AD primary-group membership and proxy-provided roles are excluded. AD and Samba subjects are SIDs; FreeIPA subjects are `ipaUniqueID` values.
 
 ## 8. Start the service and verify anonymous endpoints
 
@@ -334,7 +334,7 @@ sudo journalctl -u identityserver -n 80 --no-pager
 sudo ss -ltnp
 ```
 
-The unit runs from `/opt/identityserver`, isolates `/tmp`, hides home directories, makes the filesystem read-only apart from state/log paths, and restarts on failures. A successful interactive run as your login account does not prove these service permissions. Confirm only the intended listener is present; an unexpected HTTP listener may come from environment or command-line overrides.
+The unit runs from `/opt/identityserver` and restarts on failures. Its filesystem restrictions isolate `/tmp`, hide home directories and permit writes to the state and log paths. Verify file access under the service account with these restrictions active. Confirm that the listener matches your configuration; an unexpected HTTP listener may come from environment or command-line overrides.
 
 For proxy hosting, reload the selected proxy after its configuration check succeeds: `sudo systemctl reload apache2` or `sudo systemctl reload nginx`. Allow the public port through the host/network firewall while retaining remote administration access. On a host already managed by UFW, for example, `sudo ufw allow 8443/tcp` applies to the native example or `sudo ufw allow 443/tcp` to a proxy. Do not blindly enable a new firewall over SSH.
 
@@ -348,7 +348,7 @@ jwks_uri=$(curl --fail --silent --show-error "$authority/.well-known/openid-conf
 curl --fail --silent --show-error "$jwks_uri" | jq .
 ```
 
-Both requests should return 200 without a user-authentication prompt. Check the issuer and **all** endpoint URLs for the exact HTTPS authority, port and path. The standalone server has no landing page: a root/unknown-path 404 is expected. Do not use `curl -k` to make these checks pass.
+Both requests should return 200 anonymously. Check the issuer and all endpoint URLs for the exact HTTPS authority, port and path. The root and unknown paths return 404. Keep certificate verification enabled during these checks.
 
 ## 9. Verify Kerberos and browser SSO
 
@@ -384,13 +384,13 @@ Use a client/relying party with these settings:
 
 For a proxy, substitute its authority including `/IdentityServer`. The client should generate/check state and nonce, retain the PKCE verifier, exchange the authorization code without browser Kerberos credentials, and validate token signatures, issuer and audience. Use your own test client; if following the [OIDC debugger walkthrough](verification.md#checking-a-sign-in-with-oidcdebuggercom), explicitly configure its client/callback host and understand that directory claims are returned to that external site.
 
-Sign in as two different users in separate OS/cache/browser sessions. Confirm each subject, email and allowed direct groups; include a nested-only group that must be absent. Repeat from a session with no ticket: authorization must challenge/fail and produce no successful token result. Discovery succeeding or an initial HTTP 401 is not a complete SSO test. Check both successful authorization and server-side code redemption.
+Sign in as two different users, each with a separate operating-system session, credential cache and browser session. Confirm each subject, email and allowed direct groups; include a nested-only group that must be absent. Check both successful authorization and server-side code redemption. Then repeat from a session with no ticket: authorization must challenge or fail and produce no successful token result.
 
-For opt-in LDAP automation, see [the live directory test](verification.md#live-directory-tests). Those tests read real directory profiles but do not replace this browser check.
+Automate directory profile checks with [the live directory test](verification.md#live-directory-tests).
 
 ## Optional: Kerberos credentials for outbound LDAP
 
-Instead of a reader password, remove **both** `BindDn` and `BindPassword` from every configuration source, including the environment file. Use a separately provisioned directory-read identity/keytab and a service-owned credential cache. The inbound HTTP keytab alone does not create this cache.
+To authenticate directory reads with Kerberos, provision a directory-read identity, its keytab and a service-owned credential cache. Remove both `BindDn` and `BindPassword` from every configuration source, including the environment file, to select this authentication method.
 
 For a service already installed with its state directory, an administrator can verify the arrangement with:
 
@@ -404,7 +404,7 @@ sudo -u identityserver env KRB5CCNAME=FILE:/var/lib/identityserver/ldap.ccache \
   -b 'DC=example,DC=com' '(sAMAccountName=alice)' dn objectSid
 ```
 
-Install that reader keytab root-owned/service-group-readable (0640), then set `KRB5CCNAME=FILE:/var/lib/identityserver/ldap.ccache` in the service environment. On Samba, the tested client also required `LDAPSASL_CBINDING=tls-endpoint` and `LDAPSASL_SECPROPS=maxssf=0` to use TLS channel binding without a second SASL signing/sealing layer inside TLS. These settings passed against FreeIPA too. TLS encryption/certificate validation remain required; do not use these options as a substitute for TLS.
+Install the reader keytab with root ownership and read access for the service group (0640), then set `KRB5CCNAME=FILE:/var/lib/identityserver/ldap.ccache` in the service environment. On Samba, the tested client also required `LDAPSASL_CBINDING=tls-endpoint` and `LDAPSASL_SECPROPS=maxssf=0` to use TLS channel binding without a second SASL signing/sealing layer inside TLS. These settings passed against FreeIPA too. Keep TLS encryption and certificate validation enabled.
 
 A one-time `kinit` is only a diagnostic: tickets expire. Before relying on this mode continuously, arrange initial ticket acquisition **before application startup**, ongoing renewal/reacquisition from the reader keytab (for example with your existing credential manager or supervised timer), and failure/expiry monitoring. Reacquisition is needed after the maximum renewable lifetime. Keep the cache out of login home directories and shared `/tmp`, which the supplied unit isolates. The default explicit TLS bind account avoids this additional ticket lifecycle.
 
@@ -420,7 +420,7 @@ A one-time `kinit` is only a diagnostic: tickets expire. Before relying on this 
 
 | Symptom | Check / corrective action |
 |---|---|
-| `Microsoft.AspNetCore.App` missing | Install the ASP.NET Core 10 runtime, not only the base .NET runtime; verify the unit's `dotnet` path/architecture. |
+| `Microsoft.AspNetCore.App` missing | Install the ASP.NET Core 10 runtime; verify the unit's `dotnet` path and architecture. |
 | Startup asks for LDAP settings or a key password | Replace the Windows demonstration configuration; supply a valid provider/server/realm/base and nonempty key-protection password. Set both LDAP bind values or neither. |
 | Service fails but interactive execution works | Check working directory, readable keytab/TLS files, writable logs/state, environment file quoting and systemd home/tmp isolation. |
 | `Cannot contact any KDC` / clock skew | Verify realm mappings, KDC DNS/ports and clock synchronization from the failing client. |
@@ -428,8 +428,8 @@ A one-time `kinit` is only a diagnostic: tickets expire. Before relying on this 
 | `No key table entry found`, decrypt failure, unsupported encryption | Check keytab principal, AES entries, key version, service permissions and recently rotated account keys. For Nginx, set the explicit `auth_gss_realm`. |
 | curl/Kerberos works but browser prompts | Check browser allowlist, HTTPS trust, browser process/cache identity and packaging. Fully restart after a Negotiate challenge/policy change. Do not enable Basic fallback as the fix. |
 | LDAP server unavailable / TLS error | Test the exact LDAP hostname with `openssl` and `ldapsearch`; verify CA chain, hostname, listener and port. Linux StartTLS needs a build containing the initialization fix; use LDAPS if anonymous binds are prohibited. |
-| GSSAPI LDAP fails though HTTP SSO works | The HTTP keytab is not an LDAP cache. Check reader tickets, expiry, SASL GSSAPI libraries and the TLS channel-binding/SASL settings above. |
-| Authenticated browser, but no tokens / user not found | Check the configured realm, actual read-account access, user search base and principal attributes. FreeIPA needs `FreeIpa`, not the AD schema. Directory failures never trigger a provider fallback. |
+| GSSAPI LDAP fails though HTTP SSO works | Check the directory reader's credential cache, ticket expiry, SASL GSSAPI libraries and the TLS channel-binding/SASL settings above. |
+| Authenticated browser, but no tokens / user not found | Check the configured realm, read-account access, user search base and principal attributes. For FreeIPA, select the `FreeIpa` provider. |
 | Nginx `unknown directive auth_gss` | Install/load the matching SPNEGO module before enabling the site. |
 | Nginx 502 with `upstream sent too big header` | Keep `proxy_buffer_size 16k; proxy_buffers 4 16k;`; larger profiles may need coordinated tuning and narrower role claims. |
 | Proxy 502 connection refused | Verify the service is listening on loopback 5080 and the proxy uses that port; check the application journal. |

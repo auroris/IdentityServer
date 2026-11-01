@@ -1,9 +1,8 @@
 # Configuration
 
-Everything IdentityServer does is controlled by the `IdentityServer` section of
-`appsettings.json`, plus a `Serilog` section for logging and the usual ASP.NET Core
-`Kestrel` and `AllowedHosts` settings. This page lists where settings come from, shows a
-complete example, and explains every key.
+Configure sign-in, clients and token settings in the `IdentityServer` section of
+`appsettings.json`. Use `Serilog` for logging and the ASP.NET Core `Kestrel` and
+`AllowedHosts` settings for listeners and host filtering.
 
 Directory and proxy settings have their own pages: [Directory providers](kerberos-and-ldap.md)
 and [Apache and Nginx](apache-and-nginx.md).
@@ -26,25 +25,25 @@ and [Apache and Nginx](apache-and-nginx.md).
 Settings are read in this order. A later source overrides an earlier one for the same key.
 
 1. `appsettings.json` in the application folder. Required.
-2. `appsettings.Local.json` beside it. Optional, ignored by Git and never published; a good
-   place for machine-specific values on a development box.
+2. `appsettings.Local.json` beside it. Optional, ignored by Git and excluded from publish
+   output. Use it for machine-specific development values.
 3. Environment variables, with `__` between levels: `IdentityServer__PersistKeys=true`.
 4. Command-line arguments: `--IdentityServer:PersistKeys=true`.
 
-The host deliberately does **not** load `appsettings.Production.json`,
-`appsettings.Development.json` or .NET user secrets. `ASPNETCORE_ENVIRONMENT` still
-switches development behaviour such as detailed error pages, but it does not load a file.
+The host does not load `appsettings.Production.json`, `appsettings.Development.json` or
+.NET user secrets. `ASPNETCORE_ENVIRONMENT` controls development behaviour such as detailed
+error pages.
 
-Two things catch people out:
+Configuration changes follow these rules:
 
 - **Lists merge by index.** A `Hosts` or `Clients` list in a later source overrides entries
   position by position and leaves the rest in place. To remove a demonstration client, edit
-  the full list in `appsettings.json` rather than overriding part of it.
+  the full list in `appsettings.json`.
 - **Restart after changes.** Keys, the issuer, the authentication mode and the group patterns
   are read once at startup.
 
-Secrets such as a client secret, a bind password or the key-protection password belong in
-an environment variable or a protected local file, not in a committed `appsettings.json`.
+Store client secrets, bind passwords and the key-protection password in environment
+variables or a protected local file outside source control.
 For example, the second client's secret is `IdentityServer__Clients__1__ClientSecret`.
 
 ## A complete example
@@ -92,10 +91,10 @@ The **issuer**: the address applications expect to find in discovery and in ever
 Use the public base URL, including any application path, such as
 `https://apps.example.com/IdentityServer`.
 
-`"*"`, empty or absent means the issuer is taken from each request's URL. That is handy on a
-development machine but fragile in production, where a proxy's internal address or a second
-hostname produces a different issuer. Set it explicitly on a real deployment. It does not
-open a port or configure HTTPS; hosting is separate.
+With `"*"`, an empty value or an absent setting, the issuer comes from each request's URL.
+This supports testing with different development addresses. In production, set the issuer
+explicitly so a proxy's internal address or a second hostname cannot change it. Configure
+listeners and HTTPS separately through the host.
 
 ### `IdentityServer:UseForwardedHeaders`
 
@@ -108,7 +107,8 @@ the related `PathBase` and `PathBaseMode` settings. Leave it `false` under IIS.
 ### `AllowedHosts`
 
 Standard ASP.NET Core host filtering: the hostnames this server answers to, without ports.
-Set it to the identity hostname in production. It is unrelated to `IdentityServer:Hosts`.
+Set it to the identity hostname in production. `IdentityServer:Hosts` controls callback
+destinations and CORS origins.
 
 ## Token keys
 
@@ -118,27 +118,27 @@ Whether token keys survive a restart.
 
 - `false` (default in the repository file): new keys every start. Codes issued before the
   restart cannot be redeemed, and applications that cached the old signing key reject new
-  tokens until they refresh. Fine for a quick test, wrong for production.
+  tokens until they refresh. Use this setting for temporary development instances.
 - `true`: load the key files from `DataPath`, creating them on first start.
 
 ### `IdentityServer:DataPath`
 
 The folder holding the two key files. Defaults to `keys` under the application folder;
-choose an absolute path outside it so updates cannot delete the keys. The process needs
+choose an absolute path outside it so application updates preserve the keys. The process needs
 read and write access.
 
 ### `IdentityServer:KeyProtectionPassword`
 
 How the key files are protected at rest.
 
-- **Windows, no password:** `signing-key.bin` and `encryption-key.bin`, encrypted with
+- **Windows, password omitted:** `signing-key.bin` and `encryption-key.bin`, encrypted with
   machine-scoped DPAPI. They can only be read on the server that created them.
 - **Any OS, with a password:** `signing-key.pem` and `encryption-key.pem`, encrypted
   PKCS#8. Linux requires this. Supply it as `IdentityServer__KeyProtectionPassword` from
   your secret store and keep it with the backups of the key files.
 
-A wrong password, a damaged file or a key in the other format stops startup; the server
-never replaces an existing key on its own.
+A wrong password, a damaged file or a key in the other format stops startup and leaves the
+existing key files intact.
 
 ## Token lifetimes
 
@@ -150,8 +150,8 @@ All three use `hours:minutes:seconds`. Omit a value to keep OpenIddict's default
 | `IdentityTokenLifetime` | `01:00:00` | How long the application may rely on the ID token. The application's own session cookie has its own lifetime. |
 | `AuthorizationCodeLifetime` | `00:05:00` | How long the application has to redeem a code. Keep it short; there is no store of used codes, so PKCE and a short lifetime are the protection. |
 
-There is no refresh token. Applications start a new sign-in when a token expires, which is
-silent for a browser holding a ticket.
+Applications obtain fresh tokens by starting a new sign-in when a token expires. This is
+silent for a browser holding a ticket. Refresh tokens are not supported.
 
 ## Applications and callbacks
 
@@ -169,8 +169,7 @@ The applications allowed to ask for sign-in.
 - A **public client** (browser JavaScript, a desktop app) cannot keep a secret, so its entry
   has none. Require PKCE in the client.
 - A **confidential client** (a server-side web application) presents its `ClientSecret` when
-  redeeming a code. The secret identifies the application; it has nothing to do with any
-  person's password.
+  redeeming a code. The secret authenticates the application during that exchange.
 
 Client IDs are matched case-insensitively; secrets are exact. An empty or missing list
 accepts **any** client ID, and a `ClientId` of `"*"` or a `ClientSecret` of `"*"` act as
@@ -204,7 +203,7 @@ requested the `roles` scope.
   does not mean what a file wildcard would.
 - Nested memberships are not expanded, and on AD the primary group is not included.
 - An empty list issues no roles. The startup log says so.
-- A person with hundreds of matching groups gets hundreds of role claims and a very large
+- A person with hundreds of matching groups gets hundreds of role claims and a large
   token; the log warns past about 4 KB of role names. Keep patterns narrow.
 
 ## Authentication and directory
@@ -243,13 +242,12 @@ directory, keeping 14 files. The `Serilog:MinimumLevel` section controls volume:
 ```
 
 `Information` records startup decisions and each sign-in's outcome. For troubleshooting,
-add `"IdentityServer": "Debug"` to `Override` instead of lowering `Default`, so framework
-noise stays quiet. Levels, most to least verbose: `Verbose`, `Debug`, `Information`,
+add `"IdentityServer": "Debug"` to `Override` to keep framework logging at its current
+level. Levels, most to least verbose: `Verbose`, `Debug`, `Information`,
 `Warning`, `Error`, `Fatal`. The [troubleshooting guide](troubleshooting.md) explains the
 messages.
 
-Logs contain account names, client IDs and network addresses, never tokens, codes or
-secrets. Review them before sharing.
+Logs contain account names, client IDs and network addresses. Review them before sharing.
 
 ## Flows, scopes and claims
 
@@ -257,7 +255,7 @@ secrets. Review them before sharing.
 
 | Flow | `response_type` | Use it for |
 |---|---|---|
-| Authorization code | `code` | Everything new. Pair it with PKCE. |
+| Authorization code | `code` | New applications. Pair it with PKCE. |
 | Implicit | `id_token`, `token`, `id_token token` | Older clients that cannot do a back-channel exchange. |
 | Hybrid | `code id_token` and variants | Clients that need a token immediately and a code as well. |
 
@@ -276,16 +274,14 @@ Request `openid` always, and only the other scopes the application needs.
 | `email` | The directory `mail` attribute, or `username@localhost` as a placeholder when it is empty |
 | `roles` | One `role` per direct group matching `Groups` |
 
-A local Windows machine account gets `sub`, its name and the placeholder email, and no
-roles.
+A local Windows machine account receives `sub`, its name and the placeholder email.
 
 Apart from `sub`, claim names are the .NET `ClaimTypes` URIs, for example
 `http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress` for email and
 `http://schemas.microsoft.com/ws/2008/06/identity/claims/role` for roles. .NET applications
-use the `ClaimTypes` constants; other platforms must map these full names rather than
-expecting `email` or `role`.
+use the `ClaimTypes` constants; other platforms must map these full URI names.
 
 Claims are placed in both the ID token and the access token. Access tokens are encrypted
 with the server's encryption key, as OpenIddict does by default, so an API validating them
-needs OpenIddict validation or an equivalent that can decrypt them; the public signing keys
-alone are not enough. See [OpenIddict token formats](https://documentation.openiddict.com/configuration/token-formats).
+needs OpenIddict validation or an equivalent with access to the decryption key. See
+[OpenIddict token formats](https://documentation.openiddict.com/configuration/token-formats).

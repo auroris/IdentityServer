@@ -1,7 +1,7 @@
 <h1 align="center">IdentityServer</h1>
 
 <p align="center">
-   A lightweight OpenID Connect server using using the directory you already run, built on ASP.NET Core and OpenIddict. Run standalone or embed in your application.
+   An OpenID Connect server for the directory you already run, built on ASP.NET Core and OpenIddict. Run standalone or embed in your application.
 </p>
 
 <p align="center">
@@ -24,27 +24,27 @@ sequenceDiagram
     App-->>Browser: Redirect to IdentityServer
     Browser->>IdS: GET /connect/authorize
     IdS-->>Browser: 401 Negotiate
-    Browser->>IdS: Kerberos ticket (no prompt)
+    Browser->>IdS: Kerberos ticket (automatic sign-in)
     IdS->>Dir: LDAP read: profile and direct groups
     Dir-->>IdS: Attributes
     IdS-->>Browser: Redirect to callback with a code
     Browser->>App: Callback with code
-    Note over App,IdS: Back channel, no browser involved:<br>10. POST /connect/token with the code and PKCE verifier<br>11. ID token and access token
+    Note over App,IdS: Back channel:<br>10. POST /connect/token with the code and PKCE verifier<br>11. ID token and access token
     App->>IdS: #8203;
     IdS-->>App: #8203;
 ```
 
 ## What it is
 
-IdentityServer is a small ASP.NET Core 10 service, built on
-[OpenIddict](https://documentation.openiddict.com/), that turns an existing Active
-Directory domain, Samba AD domain or FreeIPA realm into an OpenID Connect provider. There
-is no user database to maintain and no password form: the operating system's Kerberos
-handler, or a Kerberos-aware Apache or Nginx in front, verifies the person, and the server
-reads their profile and group memberships from the directory to build the tokens.
+IdentityServer is an ASP.NET Core 10 service, built on
+[OpenIddict](https://documentation.openiddict.com/), that bridges an existing Active
+Directory domain, Samba AD domain or FreeIPA realm to OpenID Connect applications.
+The operating system's Kerberos handler, or a Kerberos-aware Apache or Nginx proxy,
+authenticates the user. IdentityServer reads
+their profile and group memberships from the directory and issues tokens to the application.
 
-- **No new accounts.** People sign in with the intranet domain account they already have. A browser
-  that holds a Kerberos ticket signs in silently; nothing is typed into IdentityServer.
+- **Directory accounts.** People use their existing intranet sign-in. A browser that trusts
+  the identity hostname and holds a Kerberos ticket signs in automatically.
 - **Standard OpenID Connect.** Discovery, JWKS, authorization and token endpoints.
   Authorization code with PKCE is the recommended flow; implicit and hybrid are available
   for older clients.
@@ -53,12 +53,12 @@ reads their profile and group memberships from the directory to build the tokens
   group membership that matches your allowlist.
 - **Three directories.** Microsoft Active Directory, Samba AD and FreeIPA, read over LDAPS
   or StartTLS with a dedicated read account or the service's own Kerberos credentials.
-- **Runs where you do.** Windows with IIS or Kestrel; Linux with Kestrel, or behind Apache
+- **Windows and Linux hosting.** Windows with IIS or Kestrel; Linux with Kestrel, or behind Apache
   or Nginx with the proxy doing the Kerberos handshake.
-- **Fails closed.** A misspelled setting stops startup. An account the directory cannot map
-  to exactly one user is denied. Nothing falls back to a weaker option on error.
-- **Small footprint.** One folder, one `appsettings.json`, two key files, logs to the console
-  and to daily files. No database.
+- **Configuration and identity checks.** Authentication and directory settings are validated
+  at startup. Directory lookups must resolve to exactly one account.
+- **Folder deployment.** Publish the application to a folder, configure it in
+  `appsettings.json`, and persist its two token keys. Logs go to the console and daily files.
 - **Embeddable.** Reference the core library from your own ASP.NET Core application to host
   sign-in beside your own endpoints.
 
@@ -68,13 +68,13 @@ reads their profile and group memberships from the directory to build the tokens
 
 ## Supported configurations
 
-Pick the row that matches your environment. Each row was exercised end to end with real
+Choose the row that matches your environment. Each row was exercised end to end with
 browser sign-in on 2026-10-31; see the [validation record](docs/validation-2026-10-31.md).
 
 | Host | Who authenticates the browser | Directory | Guide |
 |---|---|---|---|
-| Windows Server, IIS | IIS Windows Authentication | Active Directory (domain-joined, no LDAP settings needed) | [Windows and IIS](docs/windows-iis.md) |
-| Windows Server, Kestrel | The service itself (Negotiate) | Active Directory | [Windows and IIS](docs/windows-iis.md#hosting-with-kestrel-instead-of-iis) |
+| Windows Server, IIS | IIS Windows Authentication | Active Directory through the server's domain membership | [Windows and IIS](docs/windows-iis.md) |
+| Windows Server, Kestrel | The service itself (Negotiate) | Active Directory | [Windows and IIS](docs/windows-iis.md#hosting-with-kestrel) |
 | Linux, Kestrel | The service itself, from an HTTP keytab | Active Directory, Samba AD or FreeIPA | [Linux](docs/linux-deployment.md) |
 | Linux, Apache | mod_auth_gssapi, then a trusted proxy header | Active Directory, Samba AD or FreeIPA | [Linux](docs/linux-deployment.md), [Apache and Nginx](docs/apache-and-nginx.md) |
 | Linux, Nginx | The SPNEGO module, then a trusted proxy header | Active Directory, Samba AD or FreeIPA | [Linux](docs/linux-deployment.md), [Apache and Nginx](docs/apache-and-nginx.md) |
@@ -83,11 +83,10 @@ A Windows host can also read Samba AD or FreeIPA through the same LDAP settings 
 That path is covered by the automated tests but was not part of the browser validation.
 
 > [!WARNING]
-> IdentityServer is designed for intranets where browsers can reach a domain controller or
-> IPA server for Kerberos tickets. It is not an internet-facing login page: there is no
-> password form, no multi-factor step and no account self-service. Put it on HTTPS, limit the
-> applications it serves with explicit client and callback settings, and keep it on the
-> internal network.
+> Deploy IdentityServer on an intranet where browsers can reach a domain controller or IPA
+> server for Kerberos tickets. Use HTTPS and explicit client and callback settings. Its
+> sign-in flow relies on directory authentication; password sign-in, multi-factor
+> authentication and account self-service require a separate solution.
 
 ## Quick start
 
@@ -103,10 +102,10 @@ dotnet run --project IdentityServer.csproj --no-launch-profile -- --urls http://
 
 Open [http://localhost:5000/.well-known/openid-configuration](http://localhost:5000/.well-known/openid-configuration).
 A JSON document with `issuer`, `authorization_endpoint` and `token_endpoint` means hosting
-works. Discovery is deliberately anonymous, and the root URL has no page, so a 404 there is
-normal. Tests that need a real domain skip themselves when none is reachable.
+works. Discovery is anonymous; the root URL returns 404. Tests that need a live domain skip
+when a domain is unavailable.
 
-To see a real sign-in, follow [Checking a sign-in with oidcdebugger.com](docs/verification.md#checking-a-sign-in-with-oidcdebuggercom).
+To complete a browser sign-in, follow [Checking a sign-in with oidcdebugger.com](docs/verification.md#checking-a-sign-in-with-oidcdebuggercom).
 On a domain-joined machine the browser signs in silently; on a workgroup machine the local
 account still works, with fewer claims.
 
@@ -123,7 +122,7 @@ Bundle for IIS) on the destination. Then follow the guide for your row in the ta
 
 | Guide | Read it for |
 |---|---|
-| [How it works](docs/how-it-works.md) | The sign-in sequence, the three credentials involved, what the server stores, and what it deliberately leaves to the application. |
+| [How it works](docs/how-it-works.md) | The sign-in sequence, credentials, storage and application session lifecycle. |
 | [Windows and IIS](docs/windows-iis.md) | Prerequisites, publishing, the IIS site and authentication settings, key persistence, SPNs, sub-applications, Kestrel on Windows, and updates. |
 | [Linux](docs/linux-deployment.md) | From packages to a verified browser sign-in: DNS and Kerberos, keytabs for AD, Samba and FreeIPA, certificates, the service account, systemd, and troubleshooting. |
 | [Apache and Nginx](docs/apache-and-nginx.md) | The proxy templates, how the backend trusts the proxy, paths and prefixes, and the checks to run before going live. |

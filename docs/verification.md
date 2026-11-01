@@ -1,8 +1,7 @@
 # Verification
 
-Discovery loading is not a sign-in. This page lists the checks that prove a deployment
-works end to end, walks through a sign-in with a public test client, and describes the
-automated and live test suites.
+Verify a deployment by completing browser sign-in, redeeming the authorization code and
+checking the resulting claims. Test discovery and key persistence as separate steps.
 
 ## Contents
 
@@ -21,7 +20,7 @@ steps, holds a Kerberos ticket and trusts the identity hostname.
 |---|---|
 | Open `<issuer>/.well-known/openid-configuration` without signing in | Hosting works and discovery is anonymous. There must be no credential prompt. |
 | Read `issuer`, `authorization_endpoint`, `token_endpoint` and `jwks_uri` in that document, then open `jwks_uri` | Every URL uses the public HTTPS hostname and any application path. An internal name, `http://` or a missing prefix points at hosting or proxy settings. |
-| Open the server root or a made-up path | 404 with no credential prompt. The standalone server has no home page. |
+| Open the server root or a made-up path | 404 with no credential prompt. |
 | Sign in from a registered application, or from the debugger below, with `openid profile email roles` | Browser authentication, the directory read and the return to the application all work. The log shows `Authorization claims prepared`. |
 | Inspect the claims the application received | The subject is the SID or `ipaUniqueID`, the email is right, and the roles are exactly the direct groups that match your patterns. A group reachable only through nesting must be absent. |
 | Sign in as a second user, and once from a session with no ticket | Identities do not leak between requests, and the no-ticket attempt gets a challenge and no token. |
@@ -51,16 +50,16 @@ Fill in the form:
 
 Then choose a flow.
 
-**Implicit, the quickest check.** Response type `id_token`, response mode `form_post`.
+**Implicit: check authentication and claims.** Response type `id_token`, response mode `form_post`.
 Select *Send Request*. The browser signs in (silently on a domain-joined machine) and the
 debugger shows an ID token. The server log shows `Authorization claims prepared`. This
-proves browser authentication and the directory read without a token exchange.
+checks browser authentication and the directory read.
 
-**Authorization code with PKCE, what a real application does.** Response type `code`,
+**Authorization code with PKCE: check the complete flow.** Response type `code`,
 response mode `query`, *Use PKCE* on with SHA-256, Token URI `<issuer>/connect/token`.
 The debugger receives a code and tries to exchange it. A browser may refuse to call a plain
-HTTP token endpoint from the HTTPS debugger page; in that case the code arriving at all
-already proves authorization worked, and you can finish the exchange yourself:
+HTTP token endpoint from the HTTPS debugger page. Receiving the code confirms that
+authorization succeeded; finish the exchange from PowerShell:
 
 ```powershell
 $tokenRequest = @{
@@ -75,8 +74,8 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:5000/connect/token" `
 ```
 
 Use the code and verifier from the same request, before the code expires. A confidential
-client would add `client_secret`. This step needs no Windows credentials; it authenticates
-the application, not the person.
+client adds `client_secret` to authenticate the application. The code and verifier connect
+the exchange to the browser sign-in.
 
 **Hybrid.** Response type `code` plus `id_token`, response mode `form_post`. Useful only when
 testing an existing client that expects both.
@@ -105,8 +104,8 @@ Tests that need a real Windows domain skip themselves when none is reachable. Fi
 `--filter Category=LiveDirectory` to run only those, or `--filter "Category!=LiveDirectory"`
 to exclude them.
 
-Passing tests show the server logic is right. They do not exercise a real Kerberos
-handshake or a real directory; the checks above do.
+The simulated tests cover server behavior in isolation. Use the deployment checks above
+to verify the Kerberos handshake and directory access in your environment.
 
 ## Live directory tests
 
@@ -125,8 +124,8 @@ environment variables and run it on a machine that can reach the directory:
 dotnet test IdentityServer.sln --filter FullyQualifiedName~LdapIntegrationTests
 ```
 
-When enabled, a connection, certificate or mapping failure fails the test rather than
-skipping it. Run it once per provider you deploy.
+Once enabled, the test reports connection, certificate and mapping failures as failures.
+Run it once per provider you deploy.
 
 ## Local addresses during development
 
