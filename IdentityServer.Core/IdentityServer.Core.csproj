@@ -9,6 +9,7 @@
     <Description>Embeddable OpenID Connect server for ASP.NET Core, backed by Active Directory, Samba AD or FreeIPA.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
     <PackageProjectUrl>https://github.com/auroris/IdentityServer</PackageProjectUrl>
     <RepositoryUrl>https://github.com/auroris/IdentityServer</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
@@ -34,5 +35,6 @@
     <InternalsVisibleTo Include="IdentityServer.Tests" />
     <!-- Ship this project's NuGet-specific README, separate from the repository overview. -->
     <None Update="README.md" Pack="true" PackagePath="/" />
+    <None Include="../docs/images/icon-identityserver.png" Pack="true" PackagePath="/icon.png" Visible="false" />
   </ItemGroup>
 </Project>

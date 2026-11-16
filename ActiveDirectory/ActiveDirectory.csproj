@@ -16,6 +16,7 @@
     <Description>Windows Active Directory wrappers used by AurorisNet.IdentityServer, with helpers for users, groups and directory searches.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
     <PackageProjectUrl>https://github.com/auroris/IdentityServer</PackageProjectUrl>
     <RepositoryUrl>https://github.com/auroris/IdentityServer</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
@@ -32,6 +33,7 @@
     <PackageReference Include="System.DirectoryServices" Version="11.0.0" />
     <!-- Ship this project's NuGet-specific README, separate from the repository overview. -->
     <None Update="README.md" Pack="true" PackagePath="/" />
+    <None Include="../docs/images/icon-activedirectory.png" Pack="true" PackagePath="/icon.png" Visible="false" />
   </ItemGroup>
 
 </Project>
