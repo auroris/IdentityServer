@@ -136,7 +136,9 @@ both, its final job:
 No release is started when only test packages or workflow actions changed, because nothing
 shipped to users differs. Major updates of packages other than OpenIddict still open pull
 requests and run CI, but are left for manual review with a comment explaining why; after
-merging one by hand, start the Release workflow yourself if it should ship.
+merging one by hand, start the Release workflow yourself if it should ship. Major updates of
+workflow actions merge automatically: the CI run that approves them already used the updated
+actions.
 
 Dependabot workflows run with a read-only token, so the merge job requests `contents`,
 `pull-requests` and `actions` write permissions explicitly. Starting the Release workflow

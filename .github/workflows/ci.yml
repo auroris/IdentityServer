@@ -74,7 +74,8 @@ jobs:
           ECOSYSTEM: ${{ steps.metadata.outputs.package-ecosystem }}
           DEPENDENCIES: ${{ steps.metadata.outputs.dependency-names }}
         run: |
-          if ($env:UPDATE_TYPE -eq 'version-update:semver-major') {
+          # Action majors are exercised by this very run, which used the updated workflow file.
+          if ($env:UPDATE_TYPE -eq 'version-update:semver-major' -and $env:ECOSYSTEM -ne 'github_actions') {
             $message = 'CI passed, but major version updates are left for manual review. ' +
               'After merging, start the Release workflow by hand if the change should ship.'
             gh pr comment $env:PR_NUMBER --body $message
