@@ -1,0 +1,54 @@
+# Dependabot opens the pull requests that .github/workflows/ci.yml tests, merges and
+# releases. See docs/releasing.md ("Automatic dependency updates and releases").
+version: 2
+updates:
+  - package-ecosystem: nuget
+    directory: /
+    schedule:
+      interval: daily
+    open-pull-requests-limit: 10
+    groups:
+      # OpenIddict is the primary dependency; its three packages move together and get
+      # their own pull request, so each OpenIddict update becomes its own release.
+      openiddict:
+        patterns:
+          - "OpenIddict*"
+        update-types:
+          - minor
+          - patch
+      # Test-only packages never reach consumers, so merging them does not create a release.
+      test-dependencies:
+        patterns:
+          - "xunit*"
+          - "Microsoft.NET.Test.Sdk"
+          - "Microsoft.AspNetCore.Mvc.Testing"
+        update-types:
+          - minor
+          - patch
+      dependencies:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "OpenIddict*"
+          - "xunit*"
+          - "Microsoft.NET.Test.Sdk"
+          - "Microsoft.AspNetCore.Mvc.Testing"
+        update-types:
+          - minor
+          - patch
+    ignore:
+      # Stay on the OpenIddict major the code is written against. Major updates of other
+      # packages still open pull requests, but CI leaves them for manual review.
+      - dependency-name: "OpenIddict*"
+        update-types:
+          - "version-update:semver-major"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      github-actions:
+        patterns:
+          - "*"

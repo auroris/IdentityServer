@@ -1,14 +1,22 @@
 name: Release
 
-run-name: Release ${{ inputs.version }}
+run-name: Release ${{ inputs.version || format('(next {0})', inputs.bump) }}
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version (e.g. 1.2.3 or 1.2.3-rc.1; optional v prefix)'
-        required: true
+        description: 'Version (e.g. 1.2.3 or 1.2.3-rc.1; optional v prefix). Leave blank to bump the latest stable tag.'
+        required: false
         type: string
+      bump:
+        description: 'Which part of the latest stable tag to bump when version is blank'
+        required: false
+        type: choice
+        default: patch
+        options:
+          - patch
+          - minor
 
 permissions:
   contents: read
@@ -44,8 +52,27 @@ jobs:
         id: version
         env:
           RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_BUMP: ${{ inputs.bump || 'patch' }}
         run: |
-          $version = $env:RELEASE_VERSION
+          $version = $env:RELEASE_VERSION.Trim()
+          if (-not $version) {
+            # No version given (the CI workflow dispatches releases this way): bump the
+            # highest stable v<major>.<minor>.<patch> tag. Prerelease tags are skipped.
+            $tags = git tag --list 'v*'
+            if ($LASTEXITCODE -ne 0) { throw 'Could not list tags.' }
+            $latest = @($tags) |
+              Where-Object { $_ -cmatch '\Av(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\z' } |
+              ForEach-Object { [version]$_.Substring(1) } |
+              Sort-Object -Descending |
+              Select-Object -First 1
+            if (-not $latest) { throw 'No stable vMAJOR.MINOR.PATCH tag exists to bump. Enter a version.' }
+            $version = switch ($env:RELEASE_BUMP) {
+              'minor' { "$($latest.Major).$($latest.Minor + 1).0" }
+              'patch' { "$($latest.Major).$($latest.Minor).$($latest.Build + 1)" }
+              default { throw "Unknown bump '$($env:RELEASE_BUMP)'. Use patch or minor." }
+            }
+            Write-Host "Bumping $env:RELEASE_BUMP from v$latest to v$version"
+          }
           if ($version.StartsWith('v')) { $version = $version.Substring(1) }
           $number = '(0|[1-9][0-9]*)'
           $identifier = '(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'

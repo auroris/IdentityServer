@@ -1,18 +1,22 @@
 # Creating a release
 
-The [Release workflow](../.github/workflows/release.yml) runs manually and produces one
+The [Release workflow](../.github/workflows/release.yml) produces one
 GitHub release containing Windows and Linux packages plus the embeddable NuGet libraries.
 Runs from `main` also publish the libraries to NuGet.org using Trusted Publishing after
 the GitHub release succeeds. Complete the one-time setup below before the first NuGet run.
+The workflow runs manually, and [CI](../.github/workflows/ci.yml) also starts it after merging
+Dependabot updates; see [Automatic dependency updates and releases](#automatic-dependency-updates-and-releases).
 
 1. Commit and push the workflow to the repository's default branch so GitHub shows the
    **Run workflow** button.
 2. Open **Actions → Release → Run workflow** and select the branch to release.
-3. Enter a version such as `1.2.3` or `1.2.3-rc.1`, then choose **Run workflow**.
+3. Enter a version such as `1.2.3` or `1.2.3-rc.1`, or leave it blank and pick a **bump**
+   (`patch` or `minor`) to increment the latest stable `v*` tag. Then choose **Run workflow**.
 
 An optional `v` prefix is accepted. Versions use `MAJOR.MINOR.PATCH`, optionally followed
 by a prerelease suffix; build metadata (`+...`) is not supported. Numeric version components
-must be between 0 and 65534 to fit .NET assembly versions. Existing tags are rejected.
+must be between 0 and 65534 to fit .NET assembly versions. Existing tags are rejected. A blank
+version bumps the highest `vMAJOR.MINOR.PATCH` tag; prerelease tags are ignored when choosing it.
 
 The workflow tests on Windows and Linux, excluding tests that require a live directory,
 and publishes self-contained x64 builds using .NET 10. The supplied version is embedded
@@ -111,3 +115,35 @@ steps skip duplicate versions so a partial upload can resume, and an adjacent `.
 is pushed automatically with each `.nupkg`. Packages are immutable on NuGet.org; any code
 change requires a new version. Retry while the workflow's `nuget-packages` artifact is
 still retained.
+
+## Automatic dependency updates and releases
+
+[Dependabot](../.github/dependabot.yml) checks NuGet packages daily, so a new OpenIddict release is
+picked up within a day, and GitHub Actions weekly. It opens grouped pull requests: one for
+OpenIddict (the primary dependency), one for test-only packages, one for everything else, and
+one for workflow actions. OpenIddict stays on its current major version; Dependabot never
+proposes an OpenIddict major update.
+
+The [CI workflow](../.github/workflows/ci.yml) runs the test suite on Windows and Linux for
+every pull request and for pushes to `main`. For a Dependabot pull request that passes on
+both, its final job:
+
+1. Squash-merges the pull request into `main` and deletes the branch.
+2. Starts the Release workflow on `main` with a blank version. OpenIddict and other minor
+   updates bump the minor version; patch updates bump the patch version. The release then
+   runs exactly as a manual one, including NuGet.org publishing.
+
+No release is started when only test packages or workflow actions changed, because nothing
+shipped to users differs. Major updates of packages other than OpenIddict still open pull
+requests and run CI, but are left for manual review with a comment explaining why; after
+merging one by hand, start the Release workflow yourself if it should ship.
+
+Dependabot workflows run with a read-only token, so the merge job requests `contents`,
+`pull-requests` and `actions` write permissions explicitly. Starting the Release workflow
+through `workflow_dispatch` is the one way a workflow can trigger another with the built-in
+token, which is why CI does not rely on a push trigger. Several updates merged close
+together each queue a release; GitHub keeps one pending release run and cancels the ones
+between, and the last run still ships everything that was merged.
+
+To pause automation, remove or edit `.github/dependabot.yml`; to keep the updates but review
+them yourself, delete the `dependabot` job from `ci.yml`.
