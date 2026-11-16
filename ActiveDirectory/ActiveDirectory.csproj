@@ -29,7 +29,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="System.DirectoryServices" Version="10.0.15" />
+    <PackageReference Include="System.DirectoryServices" Version="11.0.0" />
     <!-- Ship this project's NuGet-specific README, separate from the repository overview. -->
     <None Update="README.md" Pack="true" PackagePath="/" />
   </ItemGroup>
