@@ -1,36 +1,40 @@
 # Apache and Nginx hosting
 
-Apache or Nginx can handle HTTPS and Kerberos authentication for IdentityServer on Linux. The proxy passes the verified principal to a Kestrel process listening on loopback. IdentityServer reads the directory and issues tokens to the application. Select `ProxyKerberos` authentication mode for this arrangement.
+Apache or Nginx can terminate HTTPS and verify the browser's Kerberos ticket for IdentityServer
+on Linux. The proxy passes the verified principal to a Kestrel process on loopback, which reads
+the directory and issues the tokens. This page describes the settings for that arrangement, how
+the server trusts the proxy, and the proxy templates. Prepare the packages, keytab, certificates
+and service with the [Linux guide](linux-deployment.md) first.
 
-A Negotiate exchange is tied to one TCP connection. Completing the exchange at the proxy lets it pool backend connections while retaining its TLS, logging and routing features. A proxy that forwards the exchange to Kestrel must preserve one backend connection per client connection.
-
-Use the [Linux guide](linux-deployment.md) to prepare packages, keytabs, certificates and the systemd service, then configure proxy trust and routing below.
+A Negotiate exchange belongs to one TCP connection. When the proxy completes the exchange, it
+can pool its connections to the server. A proxy that forwards the exchange to Kestrel must keep
+one backend connection for each client connection.
 
 You need one of these modules:
 
-- **Apache:** [mod_auth_gssapi](https://github.com/gssapi/mod_auth_gssapi), packaged on Debian and Ubuntu as `libapache2-mod-auth-gssapi`.
-- **Nginx:** the [SPNEGO authentication module](https://github.com/stnoonan/spnego-http-auth-nginx-module), available as the additional package `libnginx-mod-http-auth-spnego`.
-
-Both templates disable Basic-authentication fallback and keep the principal's realm, so the backend receives `user@REALM`.
+- **Apache:** [mod_auth_gssapi](https://github.com/gssapi/mod_auth_gssapi), packaged on Debian
+  and Ubuntu as `libapache2-mod-auth-gssapi`.
+- **Nginx:** the
+  [SPNEGO authentication module](https://github.com/stnoonan/spnego-http-auth-nginx-module),
+  packaged as `libnginx-mod-http-auth-spnego`.
 
 ## Deployment files
 
-| Repository file | Deployment purpose |
+| Repository file | Purpose |
 |---|---|
-| [appsettings.Proxy.json](../deploy/appsettings.Proxy.json) | Starting point for `/opt/identityserver/appsettings.json`; adapt the directory, public hostname, client and callback settings. |
-| [identityserver.service](../deploy/identityserver.service) | systemd unit; Kestrel listens only on `127.0.0.1:5080`. |
-| [identityserver.env.example](../deploy/identityserver.env.example) | Private environment file for application secrets. |
-| [Apache virtual host](../deploy/apache/identityserver.conf) | HTTPS, Kerberos, safe headers and `/IdentityServer` proxy mapping. |
-| [Apache secret include](../deploy/apache/proxy-secret.apache.conf.example) | The proxy's copy of the shared attestation secret. |
-| [Nginx server](../deploy/nginx/identityserver.conf) | HTTPS, SPNEGO authentication and `/IdentityServer` locations. |
-| [Nginx proxy snippet](../deploy/nginx/identityserver-proxy.conf) | Headers shared by authenticated and anonymous locations. |
-| [Nginx secret include](../deploy/nginx/proxy-secret.nginx.conf.example) | The proxy's copy of the shared attestation secret. |
+| [appsettings.Proxy.json](../deploy/appsettings.Proxy.json) | The starting point for `/opt/identityserver/appsettings.json`. Set the directory, public hostname, client and callback host. |
+| [identityserver.service](../deploy/identityserver.service) | The systemd unit. Kestrel listens on `127.0.0.1:5080` only. |
+| [identityserver.env.example](../deploy/identityserver.env.example) | The environment file for the server's secrets. |
+| [apache/identityserver.conf](../deploy/apache/identityserver.conf) | The Apache virtual host: HTTPS, Kerberos, header handling and the `/IdentityServer` mapping. |
+| [apache/proxy-secret.apache.conf.example](../deploy/apache/proxy-secret.apache.conf.example) | Apache's copy of the shared secret. |
+| [nginx/identityserver.conf](../deploy/nginx/identityserver.conf) | The Nginx server: HTTPS, SPNEGO authentication and the `/IdentityServer` locations. |
+| [nginx/identityserver-proxy.conf](../deploy/nginx/identityserver-proxy.conf) | The headers that the authenticated and anonymous locations share. |
+| [nginx/proxy-secret.nginx.conf.example](../deploy/nginx/proxy-secret.nginx.conf.example) | Nginx's copy of the shared secret. |
 
-Install the chosen templates separately from the application publish output. Replace their example domains, client identifiers and secret values with your deployment's settings.
+Install the templates separately from the publish output, and replace their example hostnames,
+client and secrets.
 
 ## Application configuration
-
-Configure proxy authentication, the public URL and forwarding:
 
 ```json
 {
@@ -47,86 +51,171 @@ Configure proxy authentication, the public URL and forwarding:
 }
 ```
 
-Configure an [LDAP provider](kerberos-and-ldap.md): `ActiveDirectory`, `SambaAd` or `FreeIpa`. ProxyKerberos requires one of these providers even when Kestrel runs on Windows. The proxy supplies a realm-qualified principal; LDAP resolves its subject from AD/Samba's `objectSid` or FreeIPA's `ipaUniqueID`. Preserve the full principal by leaving local-name mapping disabled at the proxy.
+| Setting | Default | What it does |
+|---|---|---|
+| `Authentication:Mode` | `Auto` | Set it to `ProxyKerberos` to accept the principal the proxy passes. The other modes ignore the identity header. |
+| `Authentication:ProxySecret` | none | The secret the proxy sends with every request: 32 to 1,024 characters with no whitespace. Supply it as `IdentityServer__Authentication__ProxySecret`. |
+| `UseForwardedHeaders` | `false` | Set it to `true`. Without a `ReverseProxy` section, the server uses the forwarded-header options the host configured. |
+| `ReverseProxy:KnownProxies` | none | The IP addresses the proxy connects from. Each entry is one address: the server rejects host names, subnets and wildcard addresses at startup. An IPv4 address also matches its IPv4-mapped IPv6 form. |
+| `ReverseProxy:AllowedHosts` | The hostname of `ServerUri` | The public hostnames accepted in `X-Forwarded-Host`, without ports. Required when `ServerUri` is `*`. |
+| `PathBase` | none | The public path prefix, such as `/IdentityServer`. In `Preserve` mode, a request outside the prefix returns 404. Leave it unset for root hosting and under IIS. |
+| `PathBaseMode` | `Preserve` | `Preserve`: the proxy forwards the full path. `Strip`: the proxy removes the prefix and the server restores it, for requests from a known proxy only. |
 
-| Setting | Behavior |
-|---|---|
-| `PathBase` | Optional fixed public application path, such as `/IdentityServer`. Omit for IIS integration or root hosting. Matching incoming prefixes are separated before routing and authentication; other paths return 404. |
-| `PathBaseMode` | `Preserve` (default): proxy forwards the complete path. `Strip`: proxy removes the prefix, so the app restores its configured PathBase, accepting this arrangement only from an explicitly trusted proxy. |
-| `UseForwardedHeaders` | Enable with `true` for these examples. Uses host-configured options when no `ReverseProxy` section is supplied. |
-| `ReverseProxy:KnownProxies` | Exact TCP peer IP addresses, not DNS names or subnets. Trust is determined before forwarded headers change the apparent client address. IPv4-mapped IPv6 addresses are handled. |
-| `ReverseProxy:AllowedHosts` | Exact public hostnames without ports. Defaults to the hostname in an explicit `ServerUri`. Required when issuer selection is automatic (`ServerUri: "*"`). |
-| `Authentication:Mode` | Explicitly select `ProxyKerberos` to accept a proxy-authenticated principal. Auto/native modes never trust the identity header. |
-| `Authentication:ProxySecret` | A random shared secret, at least 32 non-whitespace characters, supplied separately through `IdentityServer__Authentication__ProxySecret`. |
+The server checks these settings at startup:
 
-Forwarding accepts **one hop** and requires matching counts of `X-Forwarded-For`, `X-Forwarded-Proto` and `X-Forwarded-Host`. Templates overwrite client-supplied values and send exactly one of each. `X-Forwarded-Prefix` is ignored; the path comes from deployment configuration. For an additional external load balancer, configure and validate trust at every hop, including the peer addresses and headers each server accepts.
+- `ProxyKerberos` requires the `ReverseProxy` section, `UseForwardedHeaders` set to `true`, the
+  secret and an [LDAP directory provider](kerberos-and-ldap.md): `ActiveDirectory`, `SambaAd` or
+  `FreeIpa`. This also applies when Kestrel runs on Windows.
+- A `ReverseProxy` section requires `UseForwardedHeaders` set to `true` and at least one
+  `KnownProxies` address.
+- With `PathBase` set, an explicit `ServerUri` must end in the same path.
+- `PathBaseMode: Strip` requires `PathBase`, `KnownProxies` and `UseForwardedHeaders`.
 
-Let `UseIdentityServer` apply the forwarded headers after capturing the connection peer. Do not enable `ASPNETCORE_FORWARDEDHEADERS_ENABLED` or put a separate forwarded-header middleware ahead of it in this mode.
+**Forwarded headers.** The server accepts one proxy hop. It reads `X-Forwarded-For`,
+`X-Forwarded-Proto` and `X-Forwarded-Host`, which must carry the same number of values. The
+templates overwrite what the client sent and send one of each. The server ignores
+`X-Forwarded-Prefix`: the path comes from `PathBase`. With a load
+balancer in front of the proxy, check at every hop which peers and headers that hop accepts.
 
-`ServerUri` sets the OIDC issuer. `PathBase` sets the application path, which must also appear in an explicit `ServerUri`. Discovery, authorization, token and signing-key URLs then use the public prefix. With IIS integration, omit `PathBase` and `PathBaseMode` so IIS supplies the application path.
+**Leave forwarded-header handling to `UseIdentityServer`.** It records the connecting address
+before it applies the headers. Do not set `ASPNETCORE_FORWARDEDHEADERS_ENABLED`, and do not put
+another forwarded-header middleware in front of it.
+
+**Keep the full principal.** The directory lookup needs `user@REALM`, so leave local-name mapping
+off at the proxy. The templates do.
 
 ### Backend trust
 
-The proxy sends `X-IdentityServer-User` and `X-IdentityServer-Proxy-Secret`. IdentityServer accepts a principal only when all of the following hold:
+The proxy sends the principal in `X-IdentityServer-User` and the secret in
+`X-IdentityServer-Proxy-Secret`. In `ProxyKerberos` mode, the server accepts the principal only
+when all of these hold:
 
-- ProxyKerberos is explicitly enabled.
-- The **original connection peer** matches a configured proxy address.
-- The backend connection is loopback or uses actual TLS; forwarded `https` does not make an off-host HTTP connection safe.
-- Exactly one secret matches the deployment secret, and exactly one full `user@REALM` principal is supplied.
+- The address that connected to Kestrel is in `KnownProxies`. The server compares the connecting
+  address, before any forwarded header is applied.
+- The connection is from loopback or uses TLS. A forwarded `https` scheme does not count: an
+  HTTP connection from another machine is refused.
+- The request carries exactly one secret header, and it matches.
+- The request carries exactly one user header, with one `user@REALM` principal.
 
-In this mode, the configured proxy verifies Kerberos tickets and Kestrel verifies the proxy's attestation. Set the user header only in Kerberos-authenticating locations. The examples clear incoming user headers elsewhere and overwrite the shared-secret header.
+| Request | Result |
+|---|---|
+| No user header, on a request that needs sign-in | `403` |
+| A user header that fails a check, on a protected application route | `403` |
+| A user header that fails a check, at the authorization endpoint | The application receives `access_denied` |
 
-Duplicate or malformed values and failed verification are rejected. A missing proxy identity produces 403 when authentication is required; check the route's authentication settings at the proxy. Invalid authorization requests can return an OIDC error. The backend leaves the Kerberos exchange to the proxy.
+The server never sends a Negotiate challenge in this mode.
 
-Keep Kestrel on loopback for the supplied same-machine arrangement. For separate machines, configure HTTPS on the backend, validate its certificate at the proxy, and restrict backend access to the trusted proxy. Keep secret includes outside the web root and out of source control, access logs, diagnostics and shared configuration dumps (`nginx -T` prints includes).
+The proxy must set the user header only in locations that require Kerberos, clear a user header
+that a client sent everywhere else, and overwrite the secret header. The templates do all three.
+
+Keep Kestrel on loopback when the proxy runs on the same machine. For a proxy on another
+machine, serve HTTPS from Kestrel, validate its certificate at the proxy, and allow only the
+proxy to reach it.
+
+**Protect the secret includes.** Keep them outside the web root and out of source control, logs
+and shared configuration dumps. `nginx -T` prints them.
 
 ## Installation
 
-1. Install ASP.NET Core 10 and the LDAP client dependencies described in the [Linux guide](linux-deployment.md#2-install-the-runtime-and-client-libraries). Install Apache with mod_auth_gssapi or Nginx with the SPNEGO module, plus Kerberos libraries and the relevant TLS modules. Configure DNS, time synchronization, `/etc/krb5.conf` and LDAP CA trust.
-2. Provision `HTTP/identity.example.com@EXAMPLE.COM` for the public hostname and put the keytab where the chosen **proxy** can read it. Match the principal to the hostname clients actually use. The proxy handles inbound Kerberos; IdentityServer still needs independent LDAP read credentials or a renewable service credential cache.
-3. Publish with `dotnet publish IdentityServer.csproj -c Release -r linux-x64 --self-contained false -o artifacts/linux` (change architecture if needed). Copy the result into `/opt/identityserver`. Create a dedicated `identityserver` service user/group and give it read access to application files and write access to `/opt/identityserver/logs`. The unit's `StateDirectory` creates `/var/lib/identityserver` for persistent keys.
-4. Adapt `deploy/appsettings.Proxy.json` and install it as the deployment's **complete** `appsettings.json`. The sample uses Samba AD and a read-account UPN; for FreeIPA change the provider/server/base/realm and supply a suitable bind DN. Replace the example client and callback host. Keep `AllowedHosts` set to the public identity hostname. Check any `appsettings.Local.json` or environment overrides as well; configuration arrays merge by index, so partial overrides can retain old demo clients/hosts.
-5. Create `/etc/identityserver/identityserver.env` from the example and fill the proxy secret, an independent token-key protection password, and the LDAP bind password. `openssl rand -base64 32` can generate each random secret separately. Use the **same proxy secret** in the chosen proxy's private include, but a **different** value for token-key protection. Restrict these files to the administrator; systemd reads the environment file before switching users. Preserve the token-key secret across restarts. The sample intentionally fails startup until required secrets are supplied.
-6. Install the unit as `/etc/systemd/system/identityserver.service`, then run `systemctl daemon-reload` and `systemctl enable --now identityserver`. Its working directory is `/opt/identityserver`; `/opt/identityserver/logs` must exist and be writable. If using a Kerberos credential cache for outbound LDAP, place it in an accessible service-owned location: the unit isolates `/tmp` and protects home directories. A dedicated TLS LDAP bind account is usually simpler with this unit.
-7. Install the chosen proxy configuration as described below, adapt certificate paths, run its configuration check, then reload the proxy. Do not remove authentication directives to work around a missing module.
+The [Linux guide](linux-deployment.md) has the commands. These points are specific to a proxy:
+
+1. Provision `HTTP/identity.example.com@EXAMPLE.COM` for the hostname that browsers use, and
+   install the keytab where the **proxy** can read it. The server still needs its own LDAP read
+   credential.
+2. Install `deploy/appsettings.Proxy.json` as the whole `appsettings.json`. Set the directory,
+   client and callback host, and keep `AllowedHosts` set to the public hostname. Check
+   `appsettings.Local.json` and the environment for overrides: a later source overrides list
+   entries by position, so a partial override can leave an old client or host in place.
+3. Fill `/etc/identityserver/identityserver.env` with the proxy secret, the key-protection
+   password and the bind password. Put the **same** proxy secret in the proxy's secret include,
+   and use a **different** value for the key-protection password. Only root needs to read these
+   files: systemd reads the environment file before it switches to the service user.
+4. Install the unit and start the service. `/opt/identityserver/logs` must exist and be writable
+   by the service.
+5. Install the proxy configuration as described below, set the certificate paths, run the
+   proxy's configuration check and reload the proxy. **When the check reports a missing module,
+   install the module.** Removing the authentication directives leaves the authorization
+   endpoint without sign-in.
 
 ### Apache
 
-Install the virtual-host template in the distribution's site configuration directory, and the secret include as `/etc/identityserver/proxy-secret.apache.conf`. Enable `ssl`, `proxy`, `proxy_http`, `headers`, `alias`, and `auth_gssapi`. Adapt the keytab path if the distribution uses `/etc/httpd` rather than `/etc/apache2`.
+Install the virtual host in the distribution's site folder and the secret include as
+`/etc/identityserver/proxy-secret.apache.conf`. Enable the modules `ssl`, `proxy`, `proxy_http`,
+`headers`, `alias` and `auth_gssapi`. Change the keytab path when the distribution uses
+`/etc/httpd` in place of `/etc/apache2`. Run `apachectl configtest`, enable the site and reload
+Apache.
 
-Run `apachectl configtest` (or the distribution's equivalent), enable the site, and reload Apache. The sample restricts the authentication mechanism to `krb5`, disables Basic fallback and preserves `REMOTE_USER` as a full principal. Only `/IdentityServer/connect/authorize` requires user authentication; discovery/JWKS and token requests remain accessible to OIDC clients.
+The template allows the `krb5` mechanism only, turns Basic authentication off and keeps
+`REMOTE_USER` as the full principal. It requires Kerberos for
+`/IdentityServer/connect/authorize` alone, so discovery, the signing keys and the token endpoint
+stay open to applications.
 
 ### Nginx
 
-Install the server template in the distribution's active configuration directory, the common snippet as `/etc/nginx/snippets/identityserver-proxy.conf`, and the secret include as `/etc/identityserver/proxy-secret.nginx.conf`. Confirm the SPNEGO module is installed and loaded. Run `nginx -t`, then reload Nginx.
+Install the server file in the distribution's site folder, the snippet as
+`/etc/nginx/snippets/identityserver-proxy.conf` and the secret include as
+`/etc/identityserver/proxy-secret.nginx.conf`. Check that the SPNEGO module is loaded. Run
+`nginx -t`, then reload Nginx.
 
-The authorization location uses `auth_gss_format_full on` and `auth_gss_allow_basic_fallback off`. It clears the SPNEGO module's synthesized `Authorization` header before forwarding. The anonymous location preserves `Authorization`, allowing OIDC token clients to use their own client authentication.
-
-Both locations include the complete proxy-header snippet because Nginx header directive inheritance changes when a location defines its own headers. To preserve the full `/IdentityServer/...` path, the `proxy_pass` directives specify the backend scheme, host and port alone.
+- **Realm.** Set `auth_gss_realm` to the realm of the keytab, which is also `Directory:Realm`.
+  When the host's default realm differs, the module otherwise looks for the HTTP service in the
+  default realm and fails with `No key table entry found`.
+- **Principal.** Keep `auth_gss_format_full on`, so the server receives `user@REALM`, and
+  `auth_gss_allow_basic_fallback off`.
+- **`Authorization` header.** The authorization location clears the header the SPNEGO module
+  adds. The anonymous location forwards the header, because an application may authenticate to
+  the token endpoint with it.
+- **Shared headers.** Both locations include the whole snippet. A location that sets a header of
+  its own no longer inherits the headers of the enclosing block.
+- **Path.** The `proxy_pass` directives name the scheme, host and port only, which forwards the
+  full `/IdentityServer/...` path.
+- **Response buffer.** The snippet sets `proxy_buffer_size 16k` and `proxy_buffers 4 16k`. The
+  encrypted authorization code travels in the `Location` header and can exceed Nginx's default
+  buffer. The symptom is a `502` with `upstream sent too big header` in the Nginx error log.
+  Narrow the `Groups` patterns first. For larger redirects, raise both values together: see
+  [proxy_buffer_size](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_buffer_size).
 
 ## Root hosting and stripped prefixes
 
-For `https://identity.example.com/`, remove `PathBase` (or set it to `/`), use `PathBaseMode: Preserve`, and set `ServerUri` to the root URL. Change the proxy's authenticated location to `/connect/authorize` and its general location to `/`. Remove the `/IdentityServer` redirect. For the Nginx template, replace its final catch-all 404 location with the general proxy location so there is only one `location /`.
+**At the root of the hostname.** For `https://identity.example.com/`, remove `PathBase`, keep
+`PathBaseMode` as `Preserve`, and set `ServerUri` to the root URL. Change the proxy's
+authenticated location to `/connect/authorize` and its general location to `/`, and remove the
+`/IdentityServer` redirect. In the Nginx template, replace the final `location /` that returns
+404 with the general proxy location.
 
-Prefer preserving the prefix, as the supplied templates do. If an existing proxy strips it, set `PathBaseMode: Strip` while leaving the public `PathBase` and `ServerUri` unchanged. On Apache the backend side of the `ProxyPass`/`ProxyPassReverse` mappings becomes `http://127.0.0.1:5080/`. On Nginx, the general `/IdentityServer/` location can use `proxy_pass http://127.0.0.1:5080/`, while the exact authorization location must use `proxy_pass http://127.0.0.1:5080/connect/authorize`. Authentication locations always match the **public** path. An untrusted connection cannot activate the stripped-prefix mapping.
+**With a proxy that strips the prefix.** The templates forward the prefix, which is the simpler
+arrangement. For a proxy that removes it, set `PathBaseMode` to `Strip` and leave `PathBase` and
+`ServerUri` as they are. A request that does not come from a known proxy then gets `403`.
 
-The supplied templates authenticate the standalone server's OIDC authorization endpoint. For an embedded host, add Kerberos-authenticated locations for each additional protected route. Anonymous endpoints must clear the identity header.
+- Apache: the backend side of `ProxyPass` and `ProxyPassReverse` becomes
+  `http://127.0.0.1:5080/`.
+- Nginx: the general `/IdentityServer/` location uses `proxy_pass http://127.0.0.1:5080/`, and
+  the authorization location uses `proxy_pass http://127.0.0.1:5080/connect/authorize`.
+
+The authentication locations always match the **public** path.
+
+**Routes of an embedded host.** The templates authenticate the authorization endpoint only. Add a
+Kerberos-authenticated location for each further protected route. Every anonymous location must
+clear the identity header.
 
 ## Verification
 
-The automated suite covers public discovery/JWKS URLs, authorization-code redemption through a prefix, preserved and stripped paths, anonymous token requests, IIS-provided paths, unknown proxies, spoofed forwarding headers, invalid/duplicate/missing secrets and usernames, off-host TLS enforcement, native-mode isolation and separate identities on reused backend connections. Run `dotnet test IdentityServer.sln`.
+`ProxyHostingTests` and `ProxyConfigurationTests` cover the server's side of this arrangement,
+with a simulated proxy. Check a real deployment in its own Apache or Nginx:
 
-Before enabling a real deployment:
-
-1. Run the proxy's configuration check with the installed authentication module and actual includes. Confirm Kestrel is bound only to loopback for the sample arrangement.
-2. Fetch `https://identity.example.com/IdentityServer/.well-known/openid-configuration` without user credentials. Verify the issuer and every advertised endpoint use the expected HTTPS hostname and prefix; follow `jwks_uri` anonymously.
-3. From a client with a Kerberos ticket and browser trust for the public hostname, complete authorization-code/PKCE sign-in with a registered application. Confirm the directory subject and allowed roles.
-4. Attempt requests with caller-supplied identity/forwarding headers and no Kerberos authentication. The proxy must challenge authorization requests and must clear identity headers on anonymous paths. Direct backend requests with a missing/wrong secret must not authenticate.
-5. Test two different users sequentially over reused connections; no identity may carry over. Confirm token redemption needs only client/code credentials, and unknown/root paths do not expose a second copy of prefixed protocol endpoints.
-6. Restart IdentityServer and verify saved-key continuity, then check service/proxy logs without exposing secrets. For Windows/IIS deployments, also run the [Windows and IIS checks](windows-iis.md#check-the-deployment).
-
-Run these deployment checks in the actual Apache or Nginx environment to verify template syntax, module behavior, and Kerberos and LDAP interoperability.
-
-The Nginx proxy snippet reserves a 16 KiB response-header buffer for authorization-code redirects. The encrypted code travels in the `Location` header and can exceed Nginx's default 4/8 KiB buffer even with a modest profile. A `502` with `upstream sent too big header` in the Nginx error log indicates this response limit. Keep role claims limited to the application's needs; if larger redirects are required, adjust `proxy_buffer_size` and the corresponding `proxy_buffers` together. See [Nginx response buffering](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_buffer_size).
-
-Set the Nginx template's `auth_gss_realm` to the service keytab's realm and the application's `Directory:Realm`. This matters when several realms share a host: the installed SPNEGO module may otherwise look for the HTTP service in the host's default realm and fail with `No key table entry found`, even when the keytab contains the correct principal in another realm. Keep `auth_gss_format_full on` so the backend receives the realm-qualified username.
+1. Run the proxy's configuration check with the module and the real includes installed. Check
+   that Kestrel listens on loopback only.
+2. Fetch `https://identity.example.com/IdentityServer/.well-known/openid-configuration` with no
+   credentials. The issuer and every endpoint must carry the public HTTPS hostname and the
+   prefix. Fetch the `jwks_uri` the same way.
+3. From a client with a Kerberos ticket and browser trust for the hostname, complete an
+   authorization code sign-in with PKCE. Check the subject and the roles.
+4. Send requests that carry your own identity and forwarding headers, with no Kerberos
+   authentication. The proxy must challenge an authorization request and clear the identity
+   header on anonymous paths. A request sent straight to Kestrel with a missing or wrong secret
+   must not authenticate.
+5. Sign in as two different users one after the other. No identity may carry over. Check that
+   the token endpoint needs only the client's credentials and the code, and that the root and
+   unknown paths return 404.
+6. Restart IdentityServer and check that the signing keys are unchanged. Read the service and
+   proxy logs.

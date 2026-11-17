@@ -1,29 +1,25 @@
 # AurorisNet.IdentityServer.Directory
 
-An Active Directory people and group lookup for .NET 10: the searches behind an address book
-or a people picker, single-account lookups and group listings, with the records they return.
-Every value is escaped before it reaches an LDAP filter and every result set is bounded.
+Searches Active Directory for people and groups: the lookup behind an address book or a people
+picker, for .NET 10.
 
-## Features
+The package adds the `IDirectoryLookup` interface, its implementation `ActiveDirectoryLookup`,
+and the records they return.
 
-- **Address-book search.** A query splits into terms on spaces and commas; an account matches
-  when every term matches its display name, given name, surname, user name, email, telephone
-  number or employee ID, or, in display-name mode, its display name alone. Results are sorted
-  by display name.
-- **Two search roots.** A local root for everyday searches and a broader global root that
-  requires a minimum term length, so a one-letter query cannot sweep the directory.
-- **Account lookups.** Find one account by SID, objectGUID or `DOMAIN\user`, with its direct
-  groups, wherever it now lives under the global root.
-- **Groups.** Search groups by name, look one up with its direct members, or list the people
+- **People search.** A query splits into terms on spaces and commas. An account matches when
+  every term matches its display name, given name, surname, user name, email, telephone number or
+  employee ID. Results are sorted by display name.
+- **Two search roots.** A local root for everyday searches, and a wider global root whose
+  searches require terms of a minimum length.
+- **Account lookup.** One account by SID, objectGUID or `DOMAIN\user`, with its direct groups.
+- **Groups.** Search groups by name, read one group with its direct members, or list the people
   in a group.
 - **Application rules.** An `IDirectoryUserFilter` adds LDAP assertions, fetches extra
-  attributes and accepts or rejects each result, either for every search or for one call.
-- **Plain records.** `DirectoryUser`, `DirectoryGroup` and their detail records serialize to
-  camelCase JSON, so a directory HTTP API and its .NET clients can share them.
+  attributes, and accepts or rejects each result.
 
-The lookup uses `System.DirectoryServices` through the `AurorisNet.ActiveDirectory` package,
-so it runs on Windows, normally on a domain-joined server. Queries run as the process
-account (the application pool identity under IIS), which needs read access to the
+The lookup escapes every value it puts in an LDAP filter and limits every result set. It runs on
+Windows, through the `AurorisNet.ActiveDirectory` package. Queries run as the process account,
+which is the application pool identity under IIS, and that account needs read access to the
 configured roots.
 
 ## Install
@@ -32,13 +28,12 @@ configured roots.
 dotnet add package AurorisNet.IdentityServer.Directory
 ```
 
-The library assembly is `IdentityServer.Directory.dll` and its namespace is
-`IdentityServer.Directory`. It installs `AurorisNet.ActiveDirectory` and does not need
-`AurorisNet.IdentityServer` or ASP.NET Core.
+The namespace is `IdentityServer.Directory`. The package installs `AurorisNet.ActiveDirectory`.
+It needs neither `AurorisNet.IdentityServer` nor ASP.NET Core.
 
-## Register and search
+## Use
 
-Bind the settings and register the lookup as a singleton (it caches domain names):
+Bind the settings and register the lookup as a singleton, because it caches domain names:
 
 ```csharp
 using IdentityServer.Directory;
@@ -52,16 +47,12 @@ services.AddSingleton<IDirectoryLookup, ActiveDirectoryLookup>();
   "Directory": {
     "UserRoot": "LDAP://OU=Staff,DC=example,DC=com",
     "UserRootGlobal": "LDAP://DC=example,DC=com",
-    "GroupRoot": "LDAP://OU=Groups,DC=example,DC=com",
-    "GlobalSearchMinLength": 2,
-    "DefaultTake": 20,
-    "MaxTake": 50,
-    "MaxGroupMembers": 500
+    "GroupRoot": "LDAP://OU=Groups,DC=example,DC=com"
   }
 }
 ```
 
-An empty root searches the whole domain. Then search and look people up:
+A root that is not set covers the whole domain. Then search:
 
 ```csharp
 IReadOnlyList<DirectoryUser> people = await lookup.SearchUsersAsync("smith j", take: 10, scope: DirectoryScope.Global);
@@ -69,16 +60,28 @@ DirectoryUserDetail? user = await lookup.FindUserAsync(@"EXAMPLE\jsmith");
 DirectoryGroupListing? team = await lookup.ListGroupMembersAsync("Help Desk");
 ```
 
-A request that cannot be run as asked (a global term that is too short, a malformed id)
-throws `DirectoryQueryException`, whose message is written for the caller. A directory that
-cannot be reached throws `DirectoryUnavailableException`, never an empty result.
+| `Directory` setting | Default | What it does |
+|---|---|---|
+| `UserRoot` | The whole domain | The LDAP root of local-scope people searches. |
+| `UserRootGlobal` | The whole domain | The LDAP root of global-scope people searches and of account lookups. |
+| `GroupRoot` | The whole domain | The LDAP root of group searches and lookups. |
+| `GlobalSearchMinLength` | `2` | The shortest term a global-scope search accepts. |
+| `GlobalSearchSizeLimitBuffer` | `20` | Extra entries a people search fetches, so that accounts dropped after the query are less likely to leave the result short. |
+| `DefaultTake` | `20` | The number of results a search returns when the caller names none. |
+| `MaxTake` | `50` | The most results a search returns. |
+| `MaxGroupMembers` | `500` | The most members a group lookup or a group listing returns. |
 
-## Application rules and extra attributes
+A request that cannot run as asked, such as a global term that is too short or a malformed id,
+throws `DirectoryQueryException` with a message for the caller. A directory that cannot be
+queried throws `DirectoryUnavailableException`. The lookup never reports an unreachable directory
+as an empty result.
 
-Implement `IDirectoryUserFilter` to choose which accounts are listed. Register one with the
-lookup to apply it to every people search and group listing; `includeDisabled` requests
-bypass it. Or pass one to a single `SearchUsersAsync` call, where it replaces the registered
-filter, always applies, and returns its extra attributes in `DirectoryUser.Attributes`:
+Searches return enabled accounts only, unless the call sets `includeDisabled`. `FindUserAsync`
+returns an account whatever its state.
+
+## Application rules
+
+Implement `IDirectoryUserFilter` to choose which accounts a search lists:
 
 ```csharp
 using ActiveDirectory;
@@ -91,19 +94,24 @@ sealed class StaffOnly : IDirectoryUserFilter
     public bool IsIncluded(ADUser user) => user.GetProperty("employeeType") == "staff";
 }
 
-var staff = await lookup.SearchUsersAsync("smith", filter: new StaffOnly(), mode: DirectorySearchMode.DisplayName);
+var staff = await lookup.SearchUsersAsync("smith", filter: new StaffOnly());
 string? type = staff.FirstOrDefault()?.Attributes?.GetValueOrDefault("employeeType");
 ```
 
-`FindUserAsync` takes the attribute names to return directly. Filters and attribute names
-are trusted application code: never build them from request input without validating it.
+- A filter registered with the lookup, in the container or as a constructor argument, applies to
+  every people search and group listing. A call with `includeDisabled` bypasses it.
+- A filter passed to one `SearchUsersAsync` call replaces the registered filter for that call
+  and always applies. Its `AdditionalProperties` come back in `DirectoryUser.Attributes`.
+- `FindUserAsync` takes the names of further attributes to return.
 
-## Documentation and support
+Filters and attribute names are trusted application code. The process account reads them whoever
+the caller is, so validate anything that comes from a request.
 
-- [Using the lookup on its own](https://github.com/auroris/IdentityServer/blob/main/docs/embedding.md#using-the-people-lookup-alone)
-- [Source code](https://github.com/auroris/IdentityServer/tree/main/IdentityServer.Directory)
-- [Report an issue](https://github.com/auroris/IdentityServer/issues)
+## Documentation
+
+- [Using the people lookup](https://github.com/auroris/AurorisNet.IdentityServer/blob/main/docs/embedding.md#using-the-people-lookup-alone)
+- [Source and issues](https://github.com/auroris/AurorisNet.IdentityServer)
 
 ## License
 
-[MIT](https://github.com/auroris/IdentityServer/blob/main/LICENSE)
+[MIT](https://github.com/auroris/AurorisNet.IdentityServer/blob/main/LICENSE)

@@ -1,65 +1,58 @@
 # Verification
 
-Verify a deployment by completing browser sign-in, redeeming the authorization code and
-checking the resulting claims. Test discovery and key persistence as separate steps.
-
-## Contents
-
-- [Checks for a new deployment](#checks-for-a-new-deployment)
-- [Checking a sign-in with oidcdebugger.com](#checking-a-sign-in-with-oidcdebuggercom)
-- [Automated tests](#automated-tests)
-- [Live directory tests](#live-directory-tests)
-- [Local addresses during development](#local-addresses-during-development)
+Verify a deployment by completing a browser sign-in, redeeming the authorization code and
+checking the claims. A discovery document that loads shows only that the server runs. This page
+lists the checks, walks through a sign-in with a public debugging tool, and describes the tests.
 
 ## Checks for a new deployment
 
-Run these from a client machine that trusts the HTTPS certificate and, for the sign-in
-steps, holds a Kerberos ticket and trusts the identity hostname.
+Run these from a client machine that trusts the HTTPS certificate. For the sign-in checks, the
+machine must also hold a Kerberos ticket and trust the identity hostname for integrated
+authentication.
 
-| Check | What success tells you |
+| Check | What success shows |
 |---|---|
-| Open `<issuer>/.well-known/openid-configuration` without signing in | Hosting works and discovery is anonymous. There must be no credential prompt. |
-| Read `issuer`, `authorization_endpoint`, `token_endpoint` and `jwks_uri` in that document, then open `jwks_uri` | Every URL uses the public HTTPS hostname and any application path. An internal name, `http://` or a missing prefix points at hosting or proxy settings. |
-| Open the server root or a made-up path | 404 with no credential prompt. |
-| Sign in from a registered application, or from the debugger below, with `openid profile email roles` | Browser authentication, the directory read and the return to the application all work. The log shows `Authorization claims prepared`. |
-| Inspect the claims the application received | The subject is the SID or `ipaUniqueID`, the email is right, and the roles are exactly the direct groups that match your patterns. A group reachable only through nesting must be absent. |
-| Sign in as a second user, and once from a session with no ticket | Identities do not leak between requests, and the no-ticket attempt gets a challenge and no token. |
-| With `PersistKeys` on, confirm both key files exist under `DataPath`, restart, and redeem a code issued just before the restart | Keys persist and are readable by the service. |
-| On Linux or behind a proxy, also run the platform checks | [Linux browser SSO](linux-deployment.md#9-verify-kerberos-and-browser-sso) and [proxy verification](apache-and-nginx.md#verification). |
+| Open `<issuer>/.well-known/openid-configuration` without signing in. | The server runs and discovery is anonymous. The browser shows no credential prompt. |
+| Read `issuer`, `authorization_endpoint`, `token_endpoint` and `jwks_uri` in that document, then open `jwks_uri`. | Every URL carries the public HTTPS hostname and the application path. An internal name, `http://` or a missing prefix points at the hosting or proxy settings. |
+| Open the server's root URL or a made-up path. | 404 with no credential prompt. |
+| Sign in from a registered application, or from the debugger below, with `openid profile email roles`. | Browser authentication, the directory read and the return to the application work. The log shows `Authorization claims prepared`. |
+| Read the claims the application received. | The subject is the SID or the `ipaUniqueID`, the email is right, and the roles are the direct groups that match your patterns. A group reached only through a nested group is absent. |
+| Sign in as a second user, and try once from a session with no ticket. | Each request gets its own identity. The attempt with no ticket gets a challenge and no token. |
+| With `PersistKeys` on: check that both key files exist under `DataPath`, restart, and redeem a code issued just before the restart. | The keys persist and the service can read them. |
+| On Linux or behind a proxy, run the platform checks too. | [Browser sign-in on Linux](linux-deployment.md#9-verify-kerberos-and-browser-sso) and [proxy verification](apache-and-nginx.md#verification). |
 
 ## Checking a sign-in with oidcdebugger.com
 
-[oidcdebugger.com](https://oidcdebugger.com/) builds an authorization request and shows
-what comes back, acting as the application. The result, including the person's claims, is
-sent to that external site, so use a test account and only the scopes you need.
+[oidcdebugger.com](https://oidcdebugger.com/) acts as the application: it builds an
+authorization request and shows what comes back. **The result, with the person's claims, goes to
+that external site.** Use a test account and only the scopes you need.
 
-The repository's demonstration `appsettings.json` already registers a client named
-`optional` and allows `https://oidcdebugger.com` as a return host. On a real deployment, add
-those two entries temporarily and remove them afterwards.
+The repository's `appsettings.json` registers a client named `optional` and allows
+`https://oidcdebugger.com` as a callback host. On a real deployment, add those two entries for
+the test and remove them afterwards.
 
 Fill in the form:
 
 | Field | Value |
 |---|---|
-| Authorize URI | `<issuer>/connect/authorize`, for example `http://localhost:5000/connect/authorize` for the quick start |
+| Authorize URI | `<issuer>/connect/authorize`, such as `http://localhost:5000/connect/authorize` for a local run |
 | Redirect URI | `https://oidcdebugger.com/debug` |
 | Client ID | `optional` |
-| Scope | `openid` first; add `profile email roles` on a second run |
-| State | Any fresh random value |
-| Nonce | Keep the generated value |
+| Scope | `openid` first. Add `profile email roles` on a second run. |
+| State | Any new random value |
+| Nonce | The generated value |
 
 Then choose a flow.
 
-**Implicit: check authentication and claims.** Response type `id_token`, response mode `form_post`.
-Select *Send Request*. The browser signs in (silently on a domain-joined machine) and the
-debugger shows an ID token. The server log shows `Authorization claims prepared`. This
-checks browser authentication and the directory read.
+**Implicit, to check authentication and claims.** Set the response type to `id_token` and the
+response mode to `form_post`, and send the request. The browser signs in, and the debugger shows
+an ID token. The server log shows `Authorization claims prepared`.
 
-**Authorization code with PKCE: check the complete flow.** Response type `code`,
-response mode `query`, *Use PKCE* on with SHA-256, Token URI `<issuer>/connect/token`.
-The debugger receives a code and tries to exchange it. A browser may refuse to call a plain
-HTTP token endpoint from the HTTPS debugger page. Receiving the code confirms that
-authorization succeeded; finish the exchange from PowerShell:
+**Authorization code with PKCE, to check the whole flow.** Set the response type to `code` and
+the response mode to `query`, turn on PKCE with SHA-256, and set the token URI to
+`<issuer>/connect/token`. The debugger receives a code and tries to redeem it. A browser may
+refuse to call a plain HTTP token endpoint from the HTTPS debugger page. The code itself shows
+that authorization succeeded, and you can redeem it from PowerShell:
 
 ```powershell
 $tokenRequest = @{
@@ -73,74 +66,80 @@ Invoke-RestMethod -Method Post -Uri "http://localhost:5000/connect/token" `
     -ContentType "application/x-www-form-urlencoded" -Body $tokenRequest
 ```
 
-Use the code and verifier from the same request, before the code expires. A confidential
-client adds `client_secret` to authenticate the application. The code and verifier connect
-the exchange to the browser sign-in.
+Use the code and the verifier of the same request, before the code expires. A confidential
+client adds its `client_secret`.
 
-**Hybrid.** Response type `code` plus `id_token`, response mode `form_post`. Useful only when
-testing an existing client that expects both.
+**Hybrid.** Set the response type to `code` plus `id_token` and the response mode to
+`form_post`. Use it to test an existing client that expects both.
 
 ## Automated tests
 
 ```powershell
-dotnet test IdentityServer.sln
+dotnet test IdentityServer.sln --configuration Release --filter 'Category!=LiveDirectory'
 ```
 
-The suite runs on Windows and Linux without a directory. It covers:
+These tests run on Windows and Linux with no directory. GitHub runs the same command on each
+pull request and before a release. They cover:
 
-- Configuration: platform and provider defaults, rejected misspellings, trimming, and
-  hosting and proxy settings that must fail at startup.
-- Authentication policy: Kerberos-only mode refusing NTLM, proxy attestation with missing,
-  wrong, duplicate or spoofed headers, forwarded-header limits, and identities not leaking
-  across reused connections.
-- Directory mapping: realm checks, LDAP filter escaping, SID encoding, AD, Samba AD and
-  FreeIPA profile and group queries against a fake directory, and the Linux StartTLS
-  sequence against a loopback LDAP listener.
-- The full authorization-code and PKCE flow through OpenIddict with a simulated
-  authenticated identity, including paths behind a proxy prefix.
-- Token-key persistence, wrong passwords and format mismatches.
-- The people lookup (`IdentityServer.Directory`): query splitting, global-scope limits, LDAP
-  filter escaping, identifier parsing, application filters and the records' JSON contract.
-  Tests of SID encoding need Windows and skip elsewhere.
+- **Settings.** Platform and provider defaults, misspelled values, trimming, and the hosting and
+  proxy settings that must stop startup.
+- **Authentication.** `Kerberos` mode refusing NTLM. The proxy headers when they are missing,
+  wrong, duplicated or sent from an unknown address. Identities on reused connections.
+- **Directory mapping.** Realm checks, LDAP filter escaping, SID encoding, and the profile and
+  group queries for Active Directory, Samba AD and FreeIPA against a fake directory. On Linux,
+  the StartTLS sequence against a local LDAP listener.
+- **Sign-in.** The authorization code flow with PKCE through OpenIddict with a simulated
+  identity, also behind a proxy prefix.
+- **Token keys.** Persistence, wrong passwords and mismatched formats.
+- **The people lookup.** Query splitting, global-scope limits, filter escaping, identifier
+  parsing, application filters and the records' JSON. The tests that parse SIDs run on Windows
+  only.
 
-Tests that need a real Windows domain skip themselves when none is reachable. Filter with
-`--filter Category=LiveDirectory` to run only those, or `--filter "Category!=LiveDirectory"`
-to exclude them.
-
-The simulated tests cover server behavior in isolation. Use the deployment checks above
-to verify the Kerberos handshake and directory access in your environment.
+The tests simulate the browser's Kerberos exchange. Check the real exchange and the directory
+access with the deployment checks above.
 
 ## Live directory tests
 
-One opt-in test reads a real profile through the portable LDAP provider. Set these
-environment variables and run it on a machine that can reach the directory:
+Tests in the `LiveDirectory` category read a real directory. They run on a developer's machine
+only:
+
+```powershell
+dotnet test IdentityServer.sln --configuration Release --filter 'Category=LiveDirectory'
+```
+
+**The Active Directory tests** read the signed-in user's account through the `ActiveDirectory`
+library and the people lookup. They run on Windows under a domain account, and skip when the
+machine is signed in with a local account or cannot reach a domain controller.
+
+**The LDAP test** reads one profile through the server's LDAP provider. It skips until you set
+`IDENTITYSERVER_LDAP_TEST_CONFIG`:
 
 | Variable | Value |
 |---|---|
-| `IDENTITYSERVER_LDAP_TEST_CONFIG` | Absolute path to a private JSON file containing an `IdentityServer:Directory` section |
-| `IDENTITYSERVER_LDAP_TEST_PRINCIPAL` | A known user's realm-qualified principal, `alice@EXAMPLE.COM` |
-| `IDENTITYSERVER_LDAP_TEST_SUBJECT` | That user's SID or `ipaUniqueID`, obtained independently |
-| `IDENTITYSERVER_LDAP_TEST_GROUP` | Optional: a group the user is a direct member of |
-| `IDENTITYSERVER_LDAP_TEST_IdentityServer__Directory__BindPassword` | The read account's password, unless the process has a Kerberos credential cache |
+| `IDENTITYSERVER_LDAP_TEST_CONFIG` | The path of a private JSON file that holds an `IdentityServer:Directory` section. |
+| `IDENTITYSERVER_LDAP_TEST_PRINCIPAL` | A known user's principal with its realm, such as `alice@EXAMPLE.COM`. Required. |
+| `IDENTITYSERVER_LDAP_TEST_SUBJECT` | That user's SID or `ipaUniqueID`, read from the directory by other means. Required. |
+| `IDENTITYSERVER_LDAP_TEST_GROUP` | Optional. A group the user is a direct member of. |
+| `IDENTITYSERVER_LDAP_TEST_IdentityServer__Directory__BindPassword` | The read account's password. Leave it out when the process binds with a Kerberos credential cache. |
 
 ```powershell
 dotnet test IdentityServer.sln --filter FullyQualifiedName~LdapIntegrationTests
 ```
 
-Once enabled, the test reports connection, certificate and mapping failures as failures.
-Run it once per provider you deploy.
+With the first variable set, a connection, certificate or mapping problem fails the test. Run it
+once for each directory provider you deploy.
 
 ## Local addresses during development
 
 | How the server was started | Discovery address |
 |---|---|
-| `dotnet run ... --no-launch-profile -- --urls http://localhost:5000` | `http://localhost:5000/.well-known/openid-configuration` |
+| `dotnet run --project IdentityServer.csproj --no-launch-profile -- --urls http://localhost:5000` | `http://localhost:5000/.well-known/openid-configuration` |
 | `dotnet run --project IdentityServer.csproj --launch-profile IdentityServer` | `https://localhost:5001/...` or `http://localhost:5000/...` |
-| Visual Studio, IIS Express profile | `https://localhost:44353/...` |
+| Visual Studio, the IIS Express profile | `https://localhost:44353/...` |
 
-The HTTPS profiles use the ASP.NET Core development certificate; run
-`dotnet dev-certs https --trust` once. The IIS Express profile enables Windows and anonymous
-authentication and opens an implicit-flow request against the debugger.
+The HTTPS profiles use the ASP.NET Core development certificate: run
+`dotnet dev-certs https --trust` once. The IIS Express profile turns on Windows and anonymous
+authentication and opens an implicit-flow request to oidcdebugger.com.
 
-For command-line sign-in on Windows, `Invoke-WebRequest -UseDefaultCredentials` and curl
-builds with SPNEGO support both work.
+To sign in from a command line on Windows, use `Invoke-WebRequest -UseDefaultCredentials` or a
+`curl` build with SPNEGO support.

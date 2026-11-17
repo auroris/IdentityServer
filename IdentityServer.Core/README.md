@@ -1,54 +1,31 @@
 # AurorisNet.IdentityServer
 
-An embeddable OpenID Connect server for the directory you already run, built on ASP.NET
-Core 10 and [OpenIddict](https://documentation.openiddict.com/). Host sign-in endpoints
-beside your own application endpoints and let people use their existing directory accounts.
+Adds OpenID Connect sign-in with Active Directory, Samba AD or FreeIPA accounts to your own
+ASP.NET Core 10 application, built on [OpenIddict](https://documentation.openiddict.com/).
 
-This project is independent of Duende IdentityServer.
+The package serves the discovery, signing-key, authorization and token endpoints beside your own
+routes. Negotiate, IIS Windows Authentication or a Kerberos-authenticating Apache or Nginx proxy
+verifies the browser's Kerberos ticket. The server then reads the person's profile and direct
+group memberships from the directory and issues an ID token and an access token to the
+application. It accepts the authorization code flow, with PKCE when the client sends it, and the
+implicit and hybrid flows. It issues no refresh tokens: the application starts a new sign-in to
+get fresh tokens.
 
-## Features
-
-- **Directory sign-in.** Authenticate browsers through Negotiate/Kerberos, IIS Windows
-  Authentication, or a trusted Kerberos-aware Apache or Nginx proxy.
-- **OpenID Connect.** Discovery, JWKS, authorization and token endpoints. Authorization
-  code with PKCE is the recommended flow; implicit and hybrid support is available for
-  older clients.
-- **Directory claims.** Read a stable subject, profile attributes and direct group
-  memberships from Active Directory, Samba AD or FreeIPA. Map allowlisted groups to roles.
-- **Windows and Linux.** Host with Kestrel or behind IIS, Apache or Nginx. The Windows
-  directory provider uses Windows-only APIs; the LDAP providers support both platforms.
-- **Deployment settings.** Configure clients, callback hosts, directory access and
-  persistent signing and encryption keys in your application.
-
-## How sign-in works
-
-1. Your client application redirects the browser to the authorization endpoint.
-2. The host or authenticating proxy verifies the user's directory credentials. A browser
-   that trusts the identity hostname and holds a Kerberos ticket signs in automatically.
-3. IdentityServer reads the user's directory profile and allowed direct groups, then
-   redirects the browser to the application's callback with an authorization code.
-4. The application exchanges the code and PKCE verifier for tokens at the token endpoint.
-
-The service is intended for intranets where browsers can obtain directory Kerberos
-tickets. Password sign-in, multi-factor authentication and account self-service require
-a separate solution.
+It runs on Windows and Linux. The same server is available as a standalone application in the
+[repository](https://github.com/auroris/AurorisNet.IdentityServer).
 
 ## Install
-
-Add the package to a .NET 10 ASP.NET Core web application:
 
 ```shell
 dotnet add package AurorisNet.IdentityServer
 ```
 
-The package includes `IdentityServer.Core.dll` and automatically installs its
-`AurorisNet.ActiveDirectory` dependency. Namespaces and extension methods are under
-`IdentityServer`. Supply your own application settings; the package does not install
-demonstration settings or a standalone host.
+The package installs `IdentityServer.Core.dll` and the `AurorisNet.ActiveDirectory` package. The
+namespace is `IdentityServer`.
 
-## Embed in your application
+## Use
 
-Use the shared host builder in `Program.cs`:
+`Program.cs`:
 
 ```csharp
 using IdentityServer;
@@ -56,7 +33,7 @@ using IdentityServer;
 IdentityServerHost.Run<Startup>(args);
 ```
 
-Register the server and your controllers in `Startup.cs`:
+`Startup.cs`:
 
 ```csharp
 using IdentityServer;
@@ -81,47 +58,55 @@ public class Startup(IConfiguration configuration)
 }
 ```
 
-`UseIdentityServer` adds routing, CORS, authentication and authorization. Map your
-endpoints after it. Application routes require sign-in by default; use `[AllowAnonymous]`
-for routes intended to be public. The
-[embedding guide](https://github.com/auroris/IdentityServer/blob/main/docs/embedding.md)
-describes route authentication, proxy requirements and custom profile providers.
+`IdentityServerHost.Run` reads `appsettings.json`, an optional `appsettings.Local.json`,
+environment variables and command-line arguments, in that order, and logs to the console and to
+daily files. It reads no `appsettings.{Environment}.json` file and no user secrets.
 
-## Configure and deploy
+`UseIdentityServer` adds routing, CORS, authentication and authorization. Map your endpoints
+after it. Every routed endpoint requires sign-in unless it carries `[AllowAnonymous]` or names
+its own authentication scheme.
 
-Create `appsettings.json` in your host application using the
-[configuration example](https://github.com/auroris/IdentityServer/blob/main/docs/configuration.md#a-complete-example)
-and the guide for your environment:
+## Settings
 
-- Set the public HTTPS issuer, allowed hosts, clients and callback hosts.
-- Choose browser authentication and directory settings. On Linux, configure Kerberos
-  and an LDAP provider for Active Directory, Samba AD or FreeIPA.
-- Set the group-name allowlist if applications need role claims.
-- Persist token keys outside the deployment folder. On Linux, also supply a
-  key-protection password through your deployment's secret configuration.
-- Configure explicit proxy trust when hosting behind Apache or Nginx.
+Put the settings in the `IdentityServer` section of your application's `appsettings.json`:
 
-The shared host reads `appsettings.json`, optional `appsettings.Local.json`, environment
-variables and command-line arguments, in that order. It does not load environment-specific
-JSON files or .NET user secrets. It logs to the console and daily files.
+```json
+{
+  "IdentityServer": {
+    "ServerUri": "https://identity.example.com",
+    "PersistKeys": true,
+    "DataPath": "C:\\IdentityServerData\\keys",
+    "Hosts": [ "https://app.example.com" ],
+    "Clients": [ { "ClientId": "example-app" } ],
+    "Groups": [ "^Example App Users$" ]
+  }
+}
+```
 
-After starting the configured host, check `/.well-known/openid-configuration` for its
-discovery document, then follow the
-[sign-in verification guide](https://github.com/auroris/IdentityServer/blob/main/docs/verification.md).
+- `Hosts` lists where sign-in results may be sent. The redirect check compares the hostname
+  only, and with no entries every authorization request is rejected.
+- `Clients` lists the applications that may request sign-in. An empty list accepts any client
+  ID.
+- `PersistKeys` keeps the token keys across restarts. On Linux it needs
+  `KeyProtectionPassword`.
+- On a domain-joined Windows server the example is complete. On Linux, add a `Directory` section
+  for Active Directory, Samba AD or FreeIPA.
 
-## Documentation and support
+After the application starts, open `/.well-known/openid-configuration` to see the discovery
+document.
 
-- [How it works](https://github.com/auroris/IdentityServer/blob/main/docs/how-it-works.md)
-- [Embedding the core](https://github.com/auroris/IdentityServer/blob/main/docs/embedding.md)
-- [Configuration](https://github.com/auroris/IdentityServer/blob/main/docs/configuration.md)
-- [Directory providers](https://github.com/auroris/IdentityServer/blob/main/docs/kerberos-and-ldap.md)
-- [Windows and IIS deployment](https://github.com/auroris/IdentityServer/blob/main/docs/windows-iis.md)
-- [Linux deployment](https://github.com/auroris/IdentityServer/blob/main/docs/linux-deployment.md)
-- [Apache and Nginx](https://github.com/auroris/IdentityServer/blob/main/docs/apache-and-nginx.md)
-- [Troubleshooting](https://github.com/auroris/IdentityServer/blob/main/docs/troubleshooting.md)
-- [Source code and standalone server](https://github.com/auroris/IdentityServer)
-- [Report an issue](https://github.com/auroris/IdentityServer/issues)
+## Documentation
+
+- [Embedding the core](https://github.com/auroris/AurorisNet.IdentityServer/blob/main/docs/embedding.md)
+- [Configuration](https://github.com/auroris/AurorisNet.IdentityServer/blob/main/docs/configuration.md)
+- [Directory providers](https://github.com/auroris/AurorisNet.IdentityServer/blob/main/docs/kerberos-and-ldap.md)
+- [Windows and IIS](https://github.com/auroris/AurorisNet.IdentityServer/blob/main/docs/windows-iis.md)
+- [Linux](https://github.com/auroris/AurorisNet.IdentityServer/blob/main/docs/linux-deployment.md)
+- [Apache and Nginx](https://github.com/auroris/AurorisNet.IdentityServer/blob/main/docs/apache-and-nginx.md)
+- [Verification](https://github.com/auroris/AurorisNet.IdentityServer/blob/main/docs/verification.md)
+- [Troubleshooting](https://github.com/auroris/AurorisNet.IdentityServer/blob/main/docs/troubleshooting.md)
+- [All documentation, source and issues](https://github.com/auroris/AurorisNet.IdentityServer)
 
 ## License
 
-[MIT](https://github.com/auroris/IdentityServer/blob/main/LICENSE)
+[MIT](https://github.com/auroris/AurorisNet.IdentityServer/blob/main/LICENSE)

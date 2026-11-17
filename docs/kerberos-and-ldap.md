@@ -1,58 +1,39 @@
 # Directory providers
 
-IdentityServer reads each person's profile and groups through a directory provider.
-Choose the provider for your directory and host platform, then configure its connection
-under `IdentityServer:Directory`.
-
-For the installation steps on Linux, follow the [Linux guide](linux-deployment.md). On a
-domain-joined Windows server, the default `Windows` provider uses the service account and
-automatic domain discovery.
-
-## Contents
-
-- [Choosing a provider](#choosing-a-provider)
-- [Authentication mode](#authentication-mode)
-- [Settings for AD, Samba AD and FreeIPA](#settings-for-ad-samba-ad-and-freeipa)
-- [How the read connection authenticates](#how-the-read-connection-authenticates)
-- [How a person is matched to an account](#how-a-person-is-matched-to-an-account)
-- [Groups and roles](#groups-and-roles)
-- [Persistent token keys](#persistent-token-keys)
-- [Checking a provider](#checking-a-provider)
+IdentityServer reads each person's profile and groups through a directory provider. This page
+describes the providers and every setting under `IdentityServer:Directory`. For the installation
+steps on Linux, follow the [Linux guide](linux-deployment.md).
 
 ## Choosing a provider
 
-`IdentityServer:Directory:Provider` selects how the directory is read.
+`IdentityServer:Directory:Provider` selects how the server reads the directory.
 
-| Provider | Use it when | How it reads |
+| Provider | Use it for | How it reads |
 |---|---|---|
-| `Windows` | Use the Windows server's domain membership and service account | `System.DirectoryServices` as the service account, with automatic domain discovery. Also handles local machine accounts. |
-| `ActiveDirectory` | Microsoft AD from Linux, or from Windows with an explicit server and read account | LDAP with the AD schema |
-| `SambaAd` | A Samba AD domain controller | LDAP with the AD schema |
+| `Windows` | A domain-joined Windows server | `System.DirectoryServices`, as the account the server runs as, with automatic domain discovery. It also signs in local Windows accounts, without a directory read. |
+| `ActiveDirectory` | Microsoft Active Directory from Linux, or from Windows with an explicit server and read account | LDAP with the Active Directory schema |
+| `SambaAd` | A Samba AD domain controller | LDAP with the Active Directory schema |
 | `FreeIpa` | A FreeIPA realm | LDAP with the FreeIPA schema |
-| `Auto` (default) | | `Windows` on Windows when no `Server` is set; otherwise `ActiveDirectory`. Select `FreeIpa` explicitly for a FreeIPA realm. |
+| `Auto` (default) | | `Windows` on Windows when no `Server` is set, and `ActiveDirectory` otherwise. Name `FreeIpa` yourself for a FreeIPA realm. |
 
-Values are case-insensitive. The provider is fixed at startup and logged. A directory
-failure at run time fails that sign-in.
+Provider names are matched without regard to case. The server chooses the provider at startup
+and logs it.
 
-The `Windows` provider accepts no other `Directory` settings and cannot run on Linux. The
-other three need the settings below.
+The `Windows` provider takes no other `Directory` setting and runs on Windows only. The server
+stops at startup when either rule is broken. The other three providers need the settings below.
 
 ## Authentication mode
 
-`IdentityServer:Authentication:Mode` decides who verifies the browser and what is accepted.
+[`IdentityServer:Authentication:Mode`](configuration.md#authentication-mode) selects who verifies
+the browser. The server checks the mode against the provider at startup:
 
-| Mode | Behaviour |
-|---|---|
-| `Auto` (default) | `Negotiate` on Windows, except with FreeIPA; `Kerberos` on Linux. |
-| `Negotiate` | Kerberos or NTLM, including local accounts. Windows only. |
-| `Kerberos` | Kerberos only. NTLM and anything that cannot prove its protocol is refused, for sign-in and for protected application routes alike, including identities IIS supplies. |
-| `ProxyKerberos` | A Kerberos-authenticating Apache or Nginx verifies the browser and passes the principal to the backend under the trust rules in the [proxy guide](apache-and-nginx.md). Requires an LDAP provider; proxy identities carry no SID. |
-
-Select `ProxyKerberos` explicitly to accept proxy-authenticated identities.
+- `FreeIpa` needs `Kerberos` or `ProxyKerberos`. `Auto` selects `Kerberos` for it.
+- `ProxyKerberos` needs `ActiveDirectory`, `SambaAd` or `FreeIpa`, also on Windows. The principal
+  a proxy passes carries no SID, so the `Windows` provider cannot resolve it.
 
 ## Settings for AD, Samba AD and FreeIPA
 
-Samba AD, with a dedicated read account whose password comes from the environment:
+Samba AD, with a dedicated read account:
 
 ```json
 {
@@ -84,105 +65,89 @@ FreeIPA:
 }
 ```
 
-For Microsoft AD, use the Samba example with `Provider` set to `ActiveDirectory`.
-Supply the password as `IdentityServer__Directory__BindPassword`.
+For Microsoft Active Directory, use the Samba example with `Provider` set to `ActiveDirectory`.
+Supply the password in the environment variable `IdentityServer__Directory__BindPassword`.
 
-| Setting | Meaning |
-|---|---|
-| `Server` | Required. `ldaps://host[:port]` (TLS, default port 636) or `ldap://host[:port]` (StartTLS, default port 389). StartTLS is mandatory on `ldap://`; credentials are never sent before TLS is up. No user info, path or query. |
-| `Realm` | Required. The Kerberos realm whose users may sign in, for example `EXAMPLE.COM`. A principal from any other realm is refused before the directory is consulted. |
-| `BaseDn` | Required. The directory suffix searched for users and groups. Referral chasing is off. |
-| `UserBaseDn` | Optional. Narrows the user search. Defaults to `BaseDn` for AD and Samba, `cn=users,cn=accounts,<BaseDn>` for FreeIPA. |
-| `GroupBaseDn` | Optional. Narrows the group search. Defaults to `BaseDn` for AD and Samba, `cn=groups,cn=accounts,<BaseDn>` for FreeIPA. |
-| `NetbiosDomain` | Optional, AD and Samba only. The short domain name such as `EXAMPLE`. Lets an `EXAMPLE\user` identity be looked up when it has no SID, and formats the account-name claim as `EXAMPLE\user`. |
-| `BindDn`, `BindPassword` | Set both to read as a dedicated account, or neither to use the process's own Kerberos credentials. The name can be a DN or, on AD and Samba, a user principal name. |
-| `TimeoutSeconds` | Per-request LDAP timeout. Default 10, range 1 to 120. |
+| Setting | Default | What it does |
+|---|---|---|
+| `Server` | Required | `ldaps://host[:port]` for TLS, on port 636 unless you name one, or `ldap://host[:port]` for StartTLS, on port 389. An `ldap://` connection always upgrades to TLS before the server sends credentials. The URL takes no user name, path or query. |
+| `Realm` | Required | The Kerberos realm whose users may sign in, such as `EXAMPLE.COM`. The server refuses a principal from another realm before it contacts the directory. |
+| `BaseDn` | Required | The directory suffix searched for users and groups. The server does not follow referrals. |
+| `UserBaseDn` | `BaseDn`. For FreeIPA, `cn=users,cn=accounts,<BaseDn>`. | Narrows the user search. |
+| `GroupBaseDn` | `BaseDn`. For FreeIPA, `cn=groups,cn=accounts,<BaseDn>`. | Narrows the group search. |
+| `NetbiosDomain` | none | Active Directory and Samba only. The short domain name, such as `EXAMPLE`. With it, the server resolves an `EXAMPLE\user` identity that carries no SID, and writes the account-name claim as `EXAMPLE\user`. |
+| `BindDn`, `BindPassword` | none | Set both to read as a dedicated account, or neither to use the process's own Kerberos credentials. `BindDn` is a distinguished name or, for Active Directory and Samba, a user principal name. |
+| `TimeoutSeconds` | `10` | The timeout of each LDAP request, from 1 to 120. |
 
-Surrounding whitespace is trimmed from `Server`, `Realm`, `NetbiosDomain` and the DN
-settings. `BindPassword` is used exactly as supplied.
+The server trims whitespace around `Server`, `Realm`, `NetbiosDomain` and the DN settings. It
+uses `BindPassword` exactly as supplied. An optional setting that is present and empty stops
+startup.
 
 ## How the read connection authenticates
 
-**With `BindDn` and `BindPassword`** the server opens TLS, then binds as that account. This
-is the recommended arrangement: one dedicated account with read access to users and groups,
-rotated like any other service password. Do not use a domain administrator or FreeIPA's
-Directory Manager.
+**With `BindDn` and `BindPassword`,** the server opens TLS and then binds as that account. Use
+one dedicated account that can read users and groups, and rotate its password like any other
+service password. A domain administrator or FreeIPA's Directory Manager has far more access than
+the server needs.
 
-**With both bind settings omitted,** the server binds with its own Kerberos credentials.
-Windows uses integrated authentication. Linux uses SASL GSSAPI with a credential cache
-maintained for the directory read account. Keep that cache renewed as described in the
-[Linux guide](linux-deployment.md#optional-kerberos-credentials-for-outbound-ldap). Against
-Samba over TLS, the tested OpenLDAP client also needed `LDAPSASL_CBINDING=tls-endpoint` and
-`LDAPSASL_SECPROPS=maxssf=0` in the service environment.
+**With neither bind setting,** the server binds with its own Kerberos credentials. Windows uses
+integrated authentication. Linux uses SASL GSSAPI with the process's credential cache, which you
+must keep renewed:
+see [Kerberos credentials for outbound LDAP](linux-deployment.md#optional-kerberos-credentials-for-outbound-ldap).
 
-**Certificates** are validated by the operating system's trust store, and on Linux by
-OpenLDAP's. Install the issuing CA in the relevant trust store.
+**Certificates.** The operating system validates the directory's certificate: the Windows trust
+store, or OpenLDAP's on Linux. Install the issuing CA there. The server has no setting that
+skips validation.
 
-**StartTLS on Linux** first opens an anonymous session, upgrades it to TLS, and only then
-attaches credentials. A refused upgrade closes the connection before credentials are sent.
-Use LDAPS if the directory rejects anonymous sessions.
+**StartTLS on Linux.** The server opens an anonymous session, upgrades it to TLS and only then
+attaches credentials. When the directory refuses the upgrade, the server closes the connection
+with no credentials sent. Use `ldaps://` when the directory rejects anonymous sessions.
 
-Each sign-in opens a directory connection and closes it after the lookup.
+Each sign-in opens one directory connection and closes it after the lookup.
 
 ## How a person is matched to an account
 
-The authenticated name arrives as a Kerberos principal such as `alice@EXAMPLE.COM`, or on
-Windows as `EXAMPLE\alice` with a SID.
+The authenticated name arrives as a Kerberos principal such as `alice@EXAMPLE.COM`, or on Windows
+as `EXAMPLE\alice` with a SID.
 
 | Provider | Match |
 |---|---|
-| AD and Samba, with a SID | By `objectSid`. Unambiguous, even across trusts. |
-| AD and Samba, by name | The realm must equal `Realm`. Then `userPrincipalName` equals the full principal, or `sAMAccountName` equals the part before `@`, within `UserBaseDn`. An `EXAMPLE\alice` name needs `NetbiosDomain`. |
-| FreeIPA | The realm must equal `Realm`. Then `krbPrincipalName` equals the full principal within `UserBaseDn`. |
+| Active Directory and Samba, with a SID | `objectSid` equals the SID. |
+| Active Directory and Samba, by name | The realm must equal `Realm`. Then `userPrincipalName` equals the full principal, or `sAMAccountName` equals the part before `@`, under `UserBaseDn`. An `EXAMPLE\alice` name needs `NetbiosDomain` set to `EXAMPLE`. |
+| FreeIPA | The realm must equal `Realm`. Then `krbPrincipalName` equals the full principal, under `UserBaseDn`. |
 
-Exactly one account must match. Missing or ambiguous matches, unqualified names and service
-principals are reported to the application as `access_denied` with a warning in the log.
-Connection, certificate and bind failures are reported as `server_error` with an error in
-the log.
+Exactly one account must match.
 
-The subject claim is the account's `objectSid` on AD and Samba, or `ipaUniqueID` on
-FreeIPA, so it survives renames. The account-name claim is the authenticated principal, or
+| Result | The application receives | Log |
+|---|---|---|
+| No account or several accounts match, the realm differs, the name has no realm or domain, or the name is a service principal such as `HTTP/host@EXAMPLE.COM` | `access_denied` | A warning, `Authorization denied for user` |
+| The connection, the certificate check or the bind fails | `server_error` | An error with the exception, `Error building authorization claims` |
+
+The `sub` claim is the account's `objectSid` on Active Directory and Samba, and its `ipaUniqueID`
+on FreeIPA, so it survives a rename. The account-name claim is the authenticated principal, or
 `NETBIOS\user` when `NetbiosDomain` is set.
 
 ## Groups and roles
 
-Groups are read by searching for group objects whose `member` attribute contains the
-person's DN: `objectClass=group` under `GroupBaseDn` on AD and Samba, `groupOfNames` under
-the FreeIPA groups container. Results are paged. Only direct memberships are returned;
-nested groups, the AD primary group and FreeIPA roles are not. The group's common name is
-then matched against the `IdentityServer:Groups` patterns described in
-[Configuration](configuration.md#roles-from-groups).
+When the application requests the `roles` scope, the server searches for the groups whose
+`member` attribute holds the person's distinguished name: `objectClass=group` under `GroupBaseDn`
+on Active Directory and Samba, `objectClass=groupOfNames` on FreeIPA. The search is paged.
 
-The group search runs only when the application requests the `roles` scope.
-
-## Persistent token keys
-
-Set `IdentityServer:PersistKeys` to `true` on every production deployment and choose an absolute
-`IdentityServer:DataPath` the service can write.
-
-- **Linux** requires `IdentityServer__KeyProtectionPassword`. The keys are stored as
-  password-encrypted PKCS#8 (`signing-key.pem`, `encryption-key.pem`; AES-256-CBC,
-  PBKDF2/SHA-256, 200,000 iterations) with owner-only permissions. Keep the password with
-  your backups of the key files.
-- **Windows** without a password stores DPAPI-protected `signing-key.bin` and
-  `encryption-key.bin`, readable only on the machine that created them. With a password it
-  behaves like Linux.
-
-A wrong password, a damaged file or a key in the other format stops startup and leaves the
-existing key files intact. Manage these token keys separately from the HTTPS certificate.
+The result holds direct memberships only. Nested groups, the Active Directory primary group and
+FreeIPA roles are left out. The server then matches each group's common name against the
+`IdentityServer:Groups` patterns described in
+[Roles from groups](configuration.md#roles-from-groups).
 
 ## Checking a provider
 
-The [verification guide](verification.md) has the full checklist. The provider-specific
-points are:
+[Verification](verification.md) has the full checklist. These points depend on the provider:
 
-1. Subjects are SIDs on AD and Samba and `ipaUniqueID` values on FreeIPA. Compare against
-   the directory with `ldapsearch` or PowerShell.
-2. A user whose only path to a group is through a nested group does not receive that role.
-3. A user from another realm, an unknown account, and an NTLM sign-in in `Kerberos` mode
-   are refused with `access_denied`. A wrong read password gives `server_error` and no
-   token.
-4. An LDAP server certificate from an untrusted CA is rejected.
+1. The subject is a SID on Active Directory and Samba and an `ipaUniqueID` on FreeIPA. Compare it
+   with the directory, using `ldapsearch` or PowerShell.
+2. A person whose only path to a group runs through a nested group gets no role for it.
+3. A user from another realm, an unknown account, and an NTLM sign-in in `Kerberos` mode each
+   end in `access_denied`. A wrong read password ends in `server_error` and no token.
+4. The server rejects an LDAP certificate from an untrusted CA.
 
-The opt-in [live directory test](verification.md#live-directory-tests) performs the first
-check automatically against your directory.
+The [live directory test](verification.md#live-directory-tests) runs the first check against
+your directory.

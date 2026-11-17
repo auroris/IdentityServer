@@ -49,6 +49,9 @@ application.
 - **People lookup.** The `AurorisNet.IdentityServer.Directory` package searches Active Directory
   for address books and people pickers.
 
+"IdentityServer" is this project's own name for its assembly and configuration section. It is a
+separate project from Duende IdentityServer.
+
 ## Install
 
 **Standalone server.** Download the Windows or Linux archive from the

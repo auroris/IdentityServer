@@ -1,69 +1,53 @@
 # Windows and IIS
 
-A domain-joined Windows Server can use IIS Windows Authentication for browser sign-in and
-the application pool's account to read Active Directory. IdentityServer uses the server's
-domain membership to discover the directory and authenticate those reads.
-
-This deployment requires administrative access to IIS and maybe Active Directory.
-
-## Contents
-
-- [Prerequisites](#prerequisites)
-- [Publish the application](#publish-the-application)
-- [Folders and permissions](#folders-and-permissions)
-- [Settings](#settings)
-- [Create the IIS site](#create-the-iis-site)
-- [Kerberos and the service principal name](#kerberos-and-the-service-principal-name)
-- [Browser trust](#browser-trust)
-- [Hosting as a sub-application](#hosting-as-a-sub-application)
-- [Check the deployment](#check-the-deployment)
-- [Updating](#updating)
-- [Hosting with Kestrel](#hosting-with-kestrel)
+Follow these steps to run IdentityServer on a domain-joined Windows Server. IIS Windows
+Authentication signs the browser in, and the application pool's account reads Active Directory.
+The server finds the directory through the machine's domain membership, so it needs no
+`Directory` settings. You need administrative access to IIS, and to Active Directory when you
+register a service principal name.
 
 ## Prerequisites
 
 | Requirement | Notes |
 |---|---|
-| Windows Server, domain-joined | Validated on Windows Server 2022. Any version that runs .NET 10 and IIS 10 works. |
-| IIS with **Windows Authentication** | Add the role service under *Web Server > Security* to supply the Negotiate handler. |
-| **.NET 10 Hosting Bundle** | Supplies the ASP.NET Core module for IIS. Install it after IIS, or repair it afterwards. [Hosting Bundle](https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/iis/hosting-bundle?view=aspnetcore-10.0). |
-| A DNS name and HTTPS certificate | For example `identity.example.com`. Browsers and applications must trust the certificate. |
-| An application pool identity that can read AD | The default `ApplicationPoolIdentity` runs as the computer account, which can read the directory. A dedicated domain service account also works; see the [SPN section](#kerberos-and-the-service-principal-name). |
-| Browser trust for the hostname | Integrated authentication only happens for sites the browser considers intranet or allowlisted. See [Browser trust](#browser-trust). |
-
-Build on a workstation with the .NET SDK and copy the published folder to the server.
+| Windows Server, joined to the domain | A version that runs .NET 10 and IIS. |
+| IIS with **Windows Authentication** | Add the role service under *Web Server > Security*. |
+| **.NET 10 Hosting Bundle** | Supplies the ASP.NET Core module for IIS. Install it after IIS, or repair it afterwards. See [Hosting Bundle](https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/iis/hosting-bundle?view=aspnetcore-10.0). |
+| A DNS name and an HTTPS certificate | For example `identity.example.com`. Browsers and applications must trust the certificate. |
+| An application pool identity that can read Active Directory | The default `ApplicationPoolIdentity` reaches the directory as the computer account. A dedicated domain service account also works: see [Kerberos and the service principal name](#kerberos-and-the-service-principal-name). |
+| Browser trust for the hostname | Browsers use integrated authentication only for sites they trust for it. See [Browser trust](#browser-trust). |
 
 ## Publish the application
 
-On a machine with the .NET 10 SDK, from the repository root:
+On a machine with the .NET 10 SDK, from the root of the repository:
 
 ```powershell
 dotnet publish IdentityServer.csproj -c Release -o artifacts/publish
 ```
 
-The output contains the application, its dependencies, `appsettings.json` and a `web.config`
-for IIS. It is framework-dependent, so the Hosting Bundle on the server supplies the runtime.
-Deploy `appsettings.Local.json` separately if you use it; it is excluded from publish output.
+The output holds the application, its dependencies, `appsettings.json` and a `web.config` for
+IIS. It uses the runtime that the Hosting Bundle installed. Copy the folder to the server.
+`appsettings.Local.json` is left out of the output, so deploy it separately if you use one.
+
+A [release archive](releasing.md#run-a-self-contained-archive) holds the same application with
+its own .NET runtime.
 
 ## Folders and permissions
 
-Give the pool read access to the application and write access to the log and key folders
-listed below. Store keys outside the application folder so they survive application updates.
-
-| Path (example) | Application pool identity | Purpose |
+| Path (example) | Access for the pool identity | Purpose |
 |---|---|---|
-| `C:\Sites\IdentityServer` | Read and execute | The published application |
-| `C:\Sites\IdentityServer\logs` | Modify | Daily log files. The server writes to `logs\` under its working directory, which IIS sets to the application folder. Create the folder. |
-| `C:\IdentityServerData\keys` | Modify | The two persisted token-key files. Keep this outside the application folder. |
+| `C:\Sites\IdentityServer` | Read and execute | The published application. |
+| `C:\Sites\IdentityServer\logs` | Modify | The daily log files. The server writes to `logs\` under its working directory, which under IIS is the application folder. Create the folder. |
+| `C:\IdentityServerData\keys` | Modify | The two token-key files. A folder outside the application folder keeps them through an update. |
 
-Grant permissions to the pool identity, for example `IIS AppPool\IdentityServer` for a pool
-named `IdentityServer`, or the dedicated service account.
+Grant the access to the pool identity, which is `IIS AppPool\IdentityServer` for a pool named
+`IdentityServer`, or to the dedicated service account.
 
 ## Settings
 
-Edit `appsettings.json` in the application folder. This is a complete production example
-for a server at `https://identity.example.com` serving an application at
-`https://app.example.com`:
+Replace the published `appsettings.json`, which holds the repository's demonstration settings: a
+client named `optional` and the callback host `oidcdebugger.com`. This example is complete for a
+server at `https://identity.example.com` and an application at `https://app.example.com`:
 
 ```json
 {
@@ -90,148 +74,140 @@ for a server at `https://identity.example.com` serving an application at
 }
 ```
 
-What each part does:
+- **`ServerUri`** is the issuer that applications see in tokens. Use the public HTTPS address.
+- **`PersistKeys` and `DataPath`** keep the token keys through an application pool recycle, so
+  tokens and unexpired codes stay valid. The files are protected with machine-scoped DPAPI: only
+  this server can read them.
+- **`Hosts`** lists where sign-in results may be sent. **The redirect check compares the hostname
+  only.**
+- **`Clients`** lists the applications that may request sign-in. Add a `ClientSecret` for a
+  server-side application. **An empty list accepts any client ID.**
+- **`Groups`** is a list of regular expressions. A person's direct group becomes a `role` claim
+  when its name matches one of them and the application requests the `roles` scope.
+- **`Authentication:Mode`** is left at its default. The server then accepts Kerberos and NTLM,
+  including local Windows accounts, which get fewer claims. Add
+  `"Authentication": { "Mode": "Kerberos" }` to refuse NTLM.
 
-- **`ServerUri`** is the issuer that applications will see in tokens. Use the public HTTPS
-  address.
-- **`PersistKeys` and `DataPath`** preserve the token keys across application pool recycles,
-  keeping existing tokens and unexpired codes usable after a recycle.
-  On Windows the files are protected with machine-scoped DPAPI, which binds them to this
-  server.
-- **`Hosts`** lists where sign-in results may be sent. Only the hostname is compared.
-- **`Clients`** lists the applications allowed to sign people in. Add a `ClientSecret` for a
-  server-side application that can keep one.
-- **`Groups`** is a list of regular expressions. A person's direct AD group becomes a `role`
-  claim when its name matches one of them and the application asks for the `roles` scope.
-- **`Authentication:Mode`** and **`Directory:Provider`** are left at their defaults: on
-  Windows with no `Directory:Server` setting, the server authenticates with Negotiate and
-  reads AD as the pool identity. This also accepts NTLM and local machine accounts, which
-  receive fewer claims. Set `"Authentication": { "Mode": "Kerberos" }` to refuse NTLM.
-
-Replace the repository's demonstration `appsettings.json` with your deployment settings.
-The demonstration file accepts a client named `optional` and allows results to be sent to
-`oidcdebugger.com`.
-
-The [Configuration guide](configuration.md) describes every key, and how environment
-variables and `appsettings.Local.json` override the file.
+[Configuration](configuration.md) describes every setting, and how environment variables and
+`appsettings.Local.json` override the file.
 
 ## Create the IIS site
 
-1. **Application pool.** Create a pool named `IdentityServer` with **No Managed Code** and
-   the identity you chose above. One pool per IdentityServer instance.
-2. **Site or application.** Create a site bound to `https://identity.example.com:443` with
-   your certificate, physical path `C:\Sites\IdentityServer`, using that pool. To host under
-   an existing site instead, see [Hosting as a sub-application](#hosting-as-a-sub-application).
-3. **Authentication.** In *IIS Manager > the site > Authentication*, enable **both**
-   *Windows Authentication* and *Anonymous Authentication*, and disable the others.
+1. **Application pool.** Create a pool named `IdentityServer` with **No Managed Code** and the
+   identity you chose. Use one pool for each IdentityServer instance.
+2. **Site.** Create a site bound to `https://identity.example.com:443` with your certificate,
+   the physical path `C:\Sites\IdentityServer` and that pool. To host under an existing site,
+   see [Hosting as a sub-application](#hosting-as-a-sub-application).
+3. **Authentication.** In *IIS Manager > the site > Authentication*, enable **both** *Windows
+   Authentication* and *Anonymous Authentication*, and disable the others.
    - Windows Authentication supplies the identity when the authorization endpoint asks for it.
-   - Anonymous Authentication lets discovery, JWKS and token requests reach the application
-     anonymously. IdentityServer applies authentication and authorization to protected
-     routes inside the application.
+   - Anonymous Authentication lets discovery, the signing keys and token requests reach the
+     server without credentials. The server itself requires sign-in where it is needed.
 4. **Providers.** Under *Windows Authentication > Providers*, keep `Negotiate` above `NTLM`.
-5. **Start the pool and site**, then open
-   `https://identity.example.com/.well-known/openid-configuration` from another machine.
-   You should get JSON without a credential prompt.
+5. **Start the pool and the site.** Open
+   `https://identity.example.com/.well-known/openid-configuration` from another machine. The
+   browser shows JSON and no credential prompt.
 
-Use IIS Manager to configure the deployed site. The repository's
-`Properties/launchSettings.json` supplies the local IIS Express development settings.
+`Properties/launchSettings.json` in the repository configures IIS Express for development only.
+Configure the deployed site in IIS Manager.
 
 ## Kerberos and the service principal name
 
 Kerberos works when the browser can get a ticket for `HTTP/identity.example.com` and IIS can
-decrypt it. Which account must own that service principal name depends on one IIS setting:
+decrypt it. The account that must own that service principal name (SPN) depends on the pool
+identity and on kernel-mode authentication, which is on by default:
 
-| Pool identity | Kernel-mode authentication (default: on) | Register the SPN on |
+| Pool identity | Kernel-mode authentication | Register the SPN on |
 |---|---|---|
 | `ApplicationPoolIdentity`, `NetworkService` or `LocalSystem` | On | The **computer** account |
-| A domain service account | On, with `useAppPoolCredentials` **true** | The **service account** |
+| A domain service account | On, with `useAppPoolCredentials` set to **true** | The **service account** |
 | A domain service account | Off | The **service account** |
 
-For the server's own hostname, use the computer account's existing SPN. Register an alias
-such as `identity.example.com` with:
+The computer account already has an SPN for the server's own hostname. For an alias such as
+`identity.example.com`, register one:
 
 ```powershell
 setspn -Q HTTP/identity.example.com
 setspn -S HTTP/identity.example.com EXAMPLE\SERVER01$
 ```
 
-Use the service account in place of `SERVER01$` for the second and third rows. `setspn -Q`
-checks the name's current owner; a duplicate SPN breaks Kerberos authentication for that
-service. The `useAppPoolCredentials` switch is under
-*Configuration Editor > system.webServer/security/authentication/windowsAuthentication*.
+`setspn -Q` shows the current owner of the name. **Check it first: a duplicate SPN breaks
+Kerberos for the service.** For the second and third rows, name the service account in place of
+`SERVER01$`. The `useAppPoolCredentials` switch is under *Configuration Editor >
+system.webServer/security/authentication/windowsAuthentication*.
 
-When Kerberos is not available, Negotiate falls back to NTLM, and sign-in still succeeds in
-the default mode. The server log shows which protocol was used. Set
-`Authentication:Mode` to `Kerberos` once Kerberos works and you want NTLM refused.
+When the browser has no usable ticket, Negotiate falls back to NTLM and the sign-in still
+succeeds in the default mode. The `Authorization claims prepared` log line names the protocol.
+Set `Authentication:Mode` to `Kerberos` once Kerberos works and you want NTLM refused.
 
-See Microsoft's [Windows Authentication in ASP.NET Core](https://learn.microsoft.com/en-us/aspnet/core/security/authentication/windowsauth?view=aspnetcore-10.0)
-for the full IIS reference.
+Microsoft's
+[Windows Authentication in ASP.NET Core](https://learn.microsoft.com/en-us/aspnet/core/security/authentication/windowsauth?view=aspnetcore-10.0)
+is the full IIS reference.
 
 ## Browser trust
 
-Browsers send a Kerberos ticket only to sites they trust for integrated authentication.
+A browser sends a Kerberos ticket only to a site it trusts for integrated authentication.
 
-- **Edge, Chrome and Internet Explorer mode** use the Windows *Local intranet* zone. A plain
-  hostname is trusted automatically; a fully qualified name such as `identity.example.com`
-  usually must be added, by Group Policy (*Site to Zone Assignment List*) or the
-  `AuthServerAllowlist` browser policy.
+- **Edge and Chrome** use the Windows *Local intranet* zone. A single-label hostname is in the
+  zone automatically. Add a fully qualified name such as `identity.example.com` with Group
+  Policy (*Site to Zone Assignment List*) or with the `AuthServerAllowlist` browser policy.
 - **Firefox** has its own list. Set `network.negotiate-auth.trusted-uris` to the identity
   hostname in `about:config`, or deploy the
-  [Authentication enterprise policy](https://firefox-admin-docs.mozilla.org/reference/policies/authentication/).
+  [Authentication policy](https://firefox-admin-docs.mozilla.org/reference/policies/authentication/).
 
-A credential prompt indicates that the browser needs the hostname added to its trust
-settings. Entering domain credentials also completes sign-in; configuring trust enables
-automatic sign-in.
+A credential prompt means the browser does not trust the hostname yet. Domain credentials typed
+into the prompt also complete the sign-in.
 
 ## Hosting as a sub-application
 
-To serve IdentityServer at `https://apps.example.com/IdentityServer` inside an existing
-site, right-click the site in IIS Manager and use **Add Application**. Give it its own
-application pool with No Managed Code, point it at the published folder, and enable Windows
-and Anonymous Authentication on the application.
+To serve IdentityServer at `https://apps.example.com/IdentityServer` inside an existing site:
 
-IIS passes the `/IdentityServer` path to the server, so discovery is at
-`https://apps.example.com/IdentityServer/.well-known/openid-configuration` and every
-endpoint carries the prefix. Set `ServerUri` to the full
-`https://apps.example.com/IdentityServer` and configure applications with that authority.
-Leave `PathBase` unset so IIS supplies the application path.
-See [IIS sub-applications](https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/iis/?view=aspnetcore-10.0#sub-applications).
+1. Right-click the site in IIS Manager and choose **Add Application**.
+2. Give the application its own pool with No Managed Code, and point it at the published folder.
+3. Enable Windows Authentication and Anonymous Authentication on the application.
+4. Set `ServerUri` to `https://apps.example.com/IdentityServer`, and configure applications with
+   that authority.
+5. Leave `PathBase` unset. IIS supplies the application path.
+
+Discovery is then at `https://apps.example.com/IdentityServer/.well-known/openid-configuration`,
+and every endpoint carries the prefix. See
+[IIS sub-applications](https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/iis/?view=aspnetcore-10.0#sub-applications).
 
 ## Check the deployment
 
-Run the checks in [Verification](verification.md) from a domain-joined workstation:
+Run the checks in [Verification](verification.md#checks-for-a-new-deployment) from a
+domain-joined workstation:
 
-1. Discovery loads anonymously and every URL in it uses the public HTTPS address.
-2. A sign-in with a registered client completes without a prompt and the log shows
+1. Discovery loads without credentials, and every URL in it carries the public HTTPS address.
+2. A sign-in with a registered client completes without a prompt, and the log shows
    `Authorization claims prepared`.
-3. The application receives the subject, name, email and expected roles.
+3. The application receives the subject, name, email and the expected roles.
 4. The two key files exist under `DataPath`, and a code issued before an application pool
-   recycle can still be redeemed after it.
+   recycle can be redeemed after it.
 
 ## Updating
 
 1. Stop the application pool.
-2. Replace the application folder with the new publish output, keeping your edited
-   `appsettings.json` (and `appsettings.Local.json` if you use one). The key files live
-   outside the folder and are untouched.
+2. Replace the application folder with the new publish output. Keep your `appsettings.json`, and
+   `appsettings.Local.json` if you use one. The key files are outside the folder.
 3. Start the pool and repeat the discovery and sign-in checks.
 
-If the new `web.config` replaced one you had customised, re-check the site's authentication
-settings in IIS Manager. Keep a copy of the previous folder until the new one is verified.
-
-<a id="hosting-with-kestrel-instead-of-iis"></a>
+When the new `web.config` replaces one you had changed, check the site's authentication settings
+in IIS Manager again. Keep a copy of the previous folder until the new version is verified.
 
 ## Hosting with Kestrel
 
-IdentityServer can also run as its own process on Windows. The service then performs the
-Negotiate exchange itself, under the account that runs it.
+IdentityServer also runs as its own process on Windows. It then performs the Negotiate exchange
+itself, as the account that runs it.
 
 ```powershell
 Set-Location C:\Sites\IdentityServer
 .\IdentityServer.exe
 ```
 
-Configure the listener and certificate in `appsettings.json`:
+Start the process from the application folder: it reads `appsettings.json` from its working
+directory and writes its log files to `logs\` there. Configure the listener and the certificate
+in `appsettings.json`:
 
 ```json
 {
@@ -246,19 +222,17 @@ Configure the listener and certificate in `appsettings.json`:
 }
 ```
 
-Supply the PFX password through the environment variable
-`Kestrel__Certificates__Default__Password`, allow the port through the firewall, and set
-`ServerUri` to the public URL. The log files go to `logs\` under the working directory, so
-start the process from the application folder.
+Supply the PFX password in the environment variable `Kestrel__Certificates__Default__Password`,
+allow the port through the firewall, and set `ServerUri` to the public URL.
 
-Differences from IIS to plan for:
+Differences from IIS:
 
-- **Service hosting.** Run the host under a service wrapper such as NSSM or WinSW, or add
-  the `Microsoft.Extensions.Hosting.WindowsServices` package to an [embedded host](embedding.md).
+- **Running as a service.** Use a service wrapper such as NSSM or WinSW, or add the
+  `Microsoft.Extensions.Hosting.WindowsServices` package to an [embedded host](embedding.md).
 - **SPN.** Register `HTTP/identity.example.com` on the account that runs the process.
-- **Proxy connections.** Negotiate requires one backend connection per client connection.
-  Use IIS for proxy hosting on Windows; a generic proxy that pools connections breaks the
-  exchange.
+- **Proxies.** A Negotiate exchange belongs to one connection, so a proxy that pools backend
+  connections breaks it. To put a proxy in front of the server on Windows, use IIS.
 
-The authentication and directory defaults are the same as under IIS. Other Kestrel options
-are documented in [Kestrel endpoint configuration](https://learn.microsoft.com/en-us/aspnet/core/fundamentals/servers/kestrel/endpoints?view=aspnetcore-10.0).
+The authentication and directory defaults are the same as under IIS. For other listener options,
+see
+[Kestrel endpoint configuration](https://learn.microsoft.com/en-us/aspnet/core/fundamentals/servers/kestrel/endpoints?view=aspnetcore-10.0).
