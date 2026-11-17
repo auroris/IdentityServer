@@ -99,6 +99,9 @@ The suite runs on Windows and Linux without a directory. It covers:
 - The full authorization-code and PKCE flow through OpenIddict with a simulated
   authenticated identity, including paths behind a proxy prefix.
 - Token-key persistence, wrong passwords and format mismatches.
+- The people lookup (`IdentityServer.Directory`): query splitting, global-scope limits, LDAP
+  filter escaping, identifier parsing, application filters and the records' JSON contract.
+  Tests of SID encoding need Windows and skip elsewhere.
 
 Tests that need a real Windows domain skip themselves when none is reachable. Filter with
 `--filter Category=LiveDirectory` to run only those, or `--filter "Category!=LiveDirectory"`

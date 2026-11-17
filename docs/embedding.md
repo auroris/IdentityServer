@@ -3,13 +3,15 @@
 The standalone `IdentityServer` project is a thin host over `IdentityServer.Core`. You can
 reference the core from your own ASP.NET Core application to serve the OpenID Connect
 endpoints beside your own controllers, for example an administration page that uses the
-same Kerberos sign-in. The `ActiveDirectory` wrapper library can also be used on its own.
+same Kerberos sign-in. The `ActiveDirectory` wrapper library and the `IdentityServer.Directory`
+people lookup can also be used on their own.
 
 | Project | Responsibility |
 |---|---|
 | `IdentityServer.Core` | Authentication, directory providers, OpenIddict setup, the shared host builder |
 | `IdentityServer` | The standalone web host and demonstration settings |
 | `ActiveDirectory` | Windows-only wrappers over `System.DirectoryServices` |
+| `IdentityServer.Directory` | Active Directory people and group lookup for address books and people pickers |
 
 ## Reference the core
 
@@ -146,3 +148,66 @@ Notes for callers:
 
 The portable LDAP providers in the core use
 `System.DirectoryServices.Protocols`, which runs on both platforms.
+
+## Using the people lookup alone
+
+`IdentityServer.Directory/IdentityServer.Directory.csproj` is the search behind an address
+book or a people picker: `IDirectoryLookup` and its Active Directory implementation,
+`ActiveDirectoryLookup`, with the `DirectoryUser` and `DirectoryGroup` records they return. It
+builds on the `ActiveDirectory` library, so it is Windows-only, and it needs neither the core
+nor ASP.NET Core. Install it with `dotnet add package AurorisNet.IdentityServer.Directory`, or
+reference the checkout:
+
+```xml
+<PropertyGroup>
+  <IdentityServerRoot Condition="'$(IdentityServerRoot)' == ''">$(MSBuildThisFileDirectory)..\IdentityServer</IdentityServerRoot>
+</PropertyGroup>
+<ItemGroup>
+  <ProjectReference Include="$(IdentityServerRoot)\IdentityServer.Directory\IdentityServer.Directory.csproj" />
+</ItemGroup>
+```
+
+Register it as a singleton, with its settings bound from a top-level `Directory` section
+(separate from the server's `IdentityServer:Directory`):
+
+```csharp
+using IdentityServer.Directory;
+
+services.AddOptions<DirectoryOptions>().BindConfiguration(DirectoryOptions.SectionName);
+services.AddSingleton<IDirectoryLookup, ActiveDirectoryLookup>();
+```
+
+| `Directory` setting | Default | Meaning |
+|---|---|---|
+| `UserRoot` | whole domain | LDAP root of local-scope people searches, e.g. `LDAP://OU=Staff,DC=example,DC=com` |
+| `UserRootGlobal` | whole domain | LDAP root of global-scope searches and of single-account lookups |
+| `GroupRoot` | whole domain | LDAP root of group searches and lookups |
+| `GlobalSearchMinLength` | `2` | Shortest term a global search accepts |
+| `GlobalSearchSizeLimitBuffer` | `20` | Extra entries fetched so filtered-out accounts do not leave a page short |
+| `DefaultTake` / `MaxTake` | `20` / `50` | Results returned when the caller does not say, and at most |
+| `MaxGroupMembers` | `500` | Most members a group lookup or listing returns |
+
+Notes for callers:
+
+- Queries run as the process account (the application pool identity under IIS), not as the
+  signed-in user. That account needs read access to the roots.
+- A query splits into at most eight terms on spaces and commas. In the default
+  `DirectorySearchMode.AddressBook`, each term must match the display name, given name,
+  surname, user name, email, telephone number or employee ID; `DisplayName` mode matches the
+  display name alone. Every value is escaped, so a `*` typed by a user stays literal.
+- Only enabled accounts are returned unless the call sets `includeDisabled`. Single-account
+  lookups (`FindUserAsync`, by SID, objectGUID or `DOMAIN\user`) ignore the enabled state and
+  search `UserRootGlobal`, so a saved identity still resolves after the account moves.
+- An `IDirectoryUserFilter` adds trusted LDAP assertions, fetches extra attributes and accepts
+  or rejects each result. Pass one to the `ActiveDirectoryLookup` constructor (or register it in
+  the container) to apply it to every people search and group listing, except
+  `includeDisabled` requests. Pass one to a `SearchUsersAsync` call to replace it for that call;
+  that filter always applies and its `AdditionalProperties` come back in
+  `DirectoryUser.Attributes`. `FindUserAsync` takes the attribute names to return directly.
+  `Attributes` is `null` when nothing was asked for, and is then left out of the JSON.
+- A request that cannot be run as asked throws `DirectoryQueryException` with a message for
+  the caller (an HTTP API can return it as a 400); an unreachable directory throws
+  `DirectoryUnavailableException` (a 503 from an HTTP API), never an empty list.
+- The records serialize to camelCase JSON with `JsonSerializerDefaults.Web`, and a .NET client
+  of such an API can deserialize them into the same types. Their property names are a contract:
+  new versions add properties and do not rename them.

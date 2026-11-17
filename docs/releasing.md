@@ -33,8 +33,9 @@ For version `1.2.3`, the release assets are:
 | `IdentityServer-1.2.3-linux-x64.tar.gz` | Linux x64 application and bundled .NET runtime; executable permissions are preserved. |
 | `AurorisNet.IdentityServer.1.2.3.nupkg` | Embeddable core library; depends on `AurorisNet.ActiveDirectory` at the release version or later. |
 | `AurorisNet.ActiveDirectory.1.2.3.nupkg` | The Windows directory-provider dependency. |
-| `*.snupkg` | Debugging symbols for the two NuGet packages. |
-| `SHA256SUMS.txt` | SHA-256 checksums of all six release files. |
+| `AurorisNet.IdentityServer.Directory.1.2.3.nupkg` | The Active Directory people and group lookup; depends on `AurorisNet.ActiveDirectory` at the release version or later, not on the core. |
+| `*.snupkg` | Debugging symbols for the three NuGet packages. |
+| `SHA256SUMS.txt` | SHA-256 checksums of all eight release files. |
 
 Each archive also includes the README, license, documentation and deployment templates.
 Extract it into a deployment folder and configure it using the [Windows](windows-iis.md)
@@ -54,8 +55,9 @@ releases and tags are never overwritten by this workflow.
 ## NuGet package READMEs
 
 The libraries ship their own NuGet-specific READMEs:
-[`IdentityServer.Core/README.md`](../IdentityServer.Core/README.md) and
-[`ActiveDirectory/README.md`](../ActiveDirectory/README.md). Each project packs its file
+[`IdentityServer.Core/README.md`](../IdentityServer.Core/README.md),
+[`ActiveDirectory/README.md`](../ActiveDirectory/README.md) and
+[`IdentityServer.Directory/README.md`](../IdentityServer.Directory/README.md). Each project packs its file
 as `README.md` at the package root and selects it with `PackageReadmeFile`.
 
 Keep these package guides in sync with public APIs and configuration changes. Use standard
@@ -90,9 +92,10 @@ In **Glob Patterns and Packages**, enter these exact package IDs on separate lin
 ```text
 AurorisNet.IdentityServer
 AurorisNet.ActiveDirectory
+AurorisNet.IdentityServer.Directory
 ```
 
-Keep both entries in the same policy: NuGet [selects one matching policy](https://github.com/NuGet/NuGetGallery/issues/10947)
+Keep all three entries in the same policy: NuGet [selects one matching policy](https://github.com/NuGet/NuGetGallery/issues/10947)
 when issuing the temporary key, so separate policies with identical workflow criteria do
 not combine scopes.
 
@@ -105,7 +108,7 @@ needed for the initial publication. These settings follow the
 Run **Actions → Release → Run workflow** from `main` with the desired version. Both OS
 test runs and package builds must succeed before release publication. The same `.nupkg`
 and `.snupkg` files attached to the GitHub release are then pushed to NuGet.org, with the
-Active Directory dependency pushed first. Other branches produce a GitHub release but
+Active Directory dependency pushed first and the people lookup last. Other branches produce a GitHub release but
 skip the NuGet publishing job.
 
 If NuGet login or upload fails after the GitHub release succeeds, fix the policy or

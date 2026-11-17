@@ -10,7 +10,8 @@ namespace.
 dotnet add package AurorisNet.ActiveDirectory
 ```
 
-This package is also installed automatically by `AurorisNet.IdentityServer`. The library
+This package is also installed automatically by `AurorisNet.IdentityServer` and
+`AurorisNet.IdentityServer.Directory`. The library
 assembly remains `ActiveDirectory.dll`. Its directory operations require Windows and
 appropriate directory access.
 
@@ -34,6 +35,9 @@ Dispose wrappers after use to release any directory connections they own.
 For searches, use `DirectorySearch` with an LDAP root to scope results. Request needed
 attributes in `PropertiesToLoad`; other attributes read as empty until you call `Bind()`
 on the returned wrapper. `PageSize` enables paging and `Find<T>(howMany)` limits results.
+
+For address-book searches, people pickers and group listings with escaped, bounded queries,
+install `AurorisNet.IdentityServer.Directory`, which builds on this library.
 
 For OpenID Connect hosting, install `AurorisNet.IdentityServer`. Its portable LDAP
 providers use `System.DirectoryServices.Protocols` for Active Directory, Samba AD and

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <rect width="128" height="128" rx="26" fill="#1e293b"/>
+  <!-- People lookup: a person inside a magnifying glass -->
+  <circle cx="54" cy="54" r="30" fill="none" stroke="#fff" stroke-width="9"/>
+  <line x1="76" y1="76" x2="104" y2="104" stroke="#fff" stroke-width="12" stroke-linecap="round"/>
+  <circle cx="54" cy="45" r="9" fill="#fff"/>
+  <path d="M38 70 Q38 58 54 58 Q70 58 70 70 Z" fill="#fff"/>
+</svg>

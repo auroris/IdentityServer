@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The people and group lookup over Active Directory: address-book searches, single-account
+    lookups and group listings, with the records they return. HTTP endpoints, other data sources
+    and organization-specific listing rules belong to the consuming application, which can add
+    rules through IDirectoryUserFilter.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <AssemblyName>IdentityServer.Directory</AssemblyName>
+    <RootNamespace>IdentityServer.Directory</RootNamespace>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <IsPackable>true</IsPackable>
+    <PackageId>AurorisNet.IdentityServer.Directory</PackageId>
+    <Authors>AurorisNet</Authors>
+    <Description>Active Directory people and group lookup for address books and people pickers: escaped, bounded searches, account lookups by SID, GUID or DOMAIN\user, and group listings, with application-supplied filters.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageIcon>icon.png</PackageIcon>
+    <PackageProjectUrl>https://github.com/auroris/IdentityServer</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/auroris/IdentityServer</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <!-- Windows-only like the ActiveDirectory library it wraps; see ActiveDirectory.csproj. -->
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.15" />
+    <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.15" />
+    <ProjectReference Include="..\ActiveDirectory\ActiveDirectory.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="IdentityServer.Directory.Tests" />
+    <!-- Ship this project's NuGet-specific README, separate from the repository overview. -->
+    <None Update="README.md" Pack="true" PackagePath="/" />
+    <None Include="../docs/images/icon-directory.png" Pack="true" PackagePath="/icon.png" Visible="false" />
+  </ItemGroup>
+
+</Project>

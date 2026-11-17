@@ -185,6 +185,12 @@ jobs:
           --configuration Release --output artifacts/nuget
           -p:Version="$env:RELEASE_VERSION" -p:ContinuousIntegrationBuild=true
 
+      - name: Pack people lookup
+        run: >-
+          dotnet pack IdentityServer.Directory/IdentityServer.Directory.csproj
+          --configuration Release --output artifacts/nuget
+          -p:Version="$env:RELEASE_VERSION" -p:ContinuousIntegrationBuild=true
+
       - name: Upload NuGet packages
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
@@ -226,7 +232,7 @@ jobs:
           windows="IdentityServer-${RELEASE_VERSION}-win-x64.zip"
           linux="IdentityServer-${RELEASE_VERSION}-linux-x64.tar.gz"
           files=("$windows" "$linux")
-          for package in AurorisNet.ActiveDirectory AurorisNet.IdentityServer; do
+          for package in AurorisNet.ActiveDirectory AurorisNet.IdentityServer AurorisNet.IdentityServer.Directory; do
             files+=("${package}.${RELEASE_VERSION}.nupkg" "${package}.${RELEASE_VERSION}.snupkg")
           done
           for file in "${files[@]}"; do
@@ -283,5 +289,13 @@ jobs:
           NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
         run: >-
           dotnet nuget push "artifacts/nuget/AurorisNet.IdentityServer.$env:RELEASE_VERSION.nupkg"
+          --api-key "$env:NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
+          --skip-duplicate
+
+      - name: Publish people lookup and symbols
+        env:
+          NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
+        run: >-
+          dotnet nuget push "artifacts/nuget/AurorisNet.IdentityServer.Directory.$env:RELEASE_VERSION.nupkg"
           --api-key "$env:NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
           --skip-duplicate

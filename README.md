@@ -61,6 +61,8 @@ their profile and group memberships from the directory and issues tokens to the 
   `appsettings.json`, and persist its two token keys. Logs go to the console and daily files.
 - **Embeddable.** Reference the core library from your own ASP.NET Core application to host
   sign-in beside your own endpoints.
+- **People lookup.** A separate package, `AurorisNet.IdentityServer.Directory`, searches Active
+  Directory for address books and people pickers, with escaped, bounded queries.
 
 > [!NOTE]
 > "IdentityServer" here is this project's assembly and configuration-section name. It is
@@ -128,7 +130,7 @@ Bundle for IIS) on the destination. Then follow the guide for your row in the ta
 | [Configuration](docs/configuration.md) | Where settings come from, a complete example, every `IdentityServer` key, and the flows, scopes and claims the server issues. |
 | [Verification](docs/verification.md) | The checks to run on a new deployment, a sign-in walkthrough with oidcdebugger.com, and the automated and live test suites. |
 | [Troubleshooting](docs/troubleshooting.md) | Reading the logs stage by stage, and the known failure modes with their fixes. |
-| [Embedding the core](docs/embedding.md) | Hosting the sign-in endpoints inside your own ASP.NET Core application, and using the Active Directory wrapper library on its own. |
+| [Embedding the core](docs/embedding.md) | Hosting the sign-in endpoints inside your own ASP.NET Core application, and using the Active Directory wrapper library and the people lookup on their own. |
 | [Creating a release](docs/releasing.md) | Versioning and publishing Windows/Linux releases and the embeddable NuGet packages with Trusted Publishing, and the Dependabot automation that tests, merges and releases dependency updates. |
 
 Ready-to-adapt deployment templates live in [`deploy/`](deploy/): settings and systemd
@@ -144,9 +146,10 @@ dotnet test IdentityServer.sln -c Release
 
 The prerequisite is the .NET 10 SDK on Windows or Linux. The suite runs without a domain:
 tests that need a live directory skip themselves, and the opt-in live LDAP test is described
-in [Verification](docs/verification.md#live-directory-tests). The solution holds three
-projects: `IdentityServer` (the standalone host), `IdentityServer.Core` (the reusable
-library) and `ActiveDirectory` (a Windows-only wrapper over `System.DirectoryServices`).
+in [Verification](docs/verification.md#live-directory-tests). The solution holds four
+projects and their tests: `IdentityServer` (the standalone host), `IdentityServer.Core` (the
+reusable library), `ActiveDirectory` (a Windows-only wrapper over `System.DirectoryServices`)
+and `IdentityServer.Directory` (the Active Directory people and group lookup).
 
 ## License
 
