@@ -1,5 +1,5 @@
-# Dependabot opens the pull requests that .github/workflows/ci.yml tests, merges and
-# releases. See docs/releasing.md ("Automatic dependency updates and releases").
+# Dependabot opens the pull requests that .github/workflows/ci.yml tests and merges. An update of a shipped package then
+# starts the Release workflow, as docs/releasing.md in auroris/AurorisNet.Build describes.
 version: 2
 updates:
   - package-ecosystem: nuget

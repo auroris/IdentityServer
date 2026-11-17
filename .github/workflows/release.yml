@@ -1,22 +1,37 @@
 name: Release
 
-run-name: Release ${{ inputs.version || format('(next {0})', inputs.bump) }}
+run-name: Release ${{ inputs.version || format('(next {0})', inputs.bump) }}${{ inputs.dry-run && ' (dry run)' || '' }}
 
+# Publishes the self-contained Windows and Linux archives and the three NuGet packages to GitHub, and the packages to
+# nuget.org. Starts by hand, or from the CI workflow when a Dependabot update of a shipped package has passed the tests.
+# The shared steps come from auroris/AurorisNet.Build, whose docs/releasing.md describes them. nuget.org trusts this file
+# by its name, so keep it release.yml.
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version (e.g. 1.2.3 or 1.2.3-rc.1; optional v prefix). Leave blank to bump the latest stable tag.'
+        description: Version to publish, such as 1.2.3 or 1.2.3-rc.1. Leave empty to raise the newest release tag.
         required: false
         type: string
       bump:
-        description: 'Which part of the latest stable tag to bump when version is blank'
-        required: false
+        description: Which part of the newest stable tag to raise when the version is empty
         type: choice
         default: patch
         options:
           - patch
           - minor
+      test:
+        description: Run the tests before publishing. The automated runs turn this off, because they have just run them.
+        type: boolean
+        default: true
+      dry-run:
+        description: Test, build and pack only, and keep the archives and packages as an artifact
+        type: boolean
+        default: false
+      notes:
+        description: Notes for the GitHub release, in Markdown, shown above the generated list of changes
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -34,68 +49,28 @@ env:
   DOTNET_NOLOGO: '1'
 
 jobs:
-  prepare:
-    name: Validate version
+  version:
+    name: Choose the version
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       version: ${{ steps.version.outputs.version }}
-      tag: ${{ steps.version.outputs.tag }}
-      prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Validate version and reject existing tags
+      - name: Choose the version
         id: version
-        env:
-          RELEASE_VERSION: ${{ inputs.version }}
-          RELEASE_BUMP: ${{ inputs.bump || 'patch' }}
-        run: |
-          $version = $env:RELEASE_VERSION.Trim()
-          if (-not $version) {
-            # No version given (the CI workflow dispatches releases this way): bump the
-            # highest stable v<major>.<minor>.<patch> tag. Prerelease tags are skipped.
-            $tags = git tag --list 'v*'
-            if ($LASTEXITCODE -ne 0) { throw 'Could not list tags.' }
-            $latest = @($tags) |
-              Where-Object { $_ -cmatch '\Av(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\z' } |
-              ForEach-Object { [version]$_.Substring(1) } |
-              Sort-Object -Descending |
-              Select-Object -First 1
-            if (-not $latest) { throw 'No stable vMAJOR.MINOR.PATCH tag exists to bump. Enter a version.' }
-            $version = switch ($env:RELEASE_BUMP) {
-              'minor' { "$($latest.Major).$($latest.Minor + 1).0" }
-              'patch' { "$($latest.Major).$($latest.Minor).$($latest.Build + 1)" }
-              default { throw "Unknown bump '$($env:RELEASE_BUMP)'. Use patch or minor." }
-            }
-            Write-Host "Bumping $env:RELEASE_BUMP from v$latest to v$version"
-          }
-          if ($version.StartsWith('v')) { $version = $version.Substring(1) }
-          $number = '(0|[1-9][0-9]*)'
-          $identifier = '(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
-          if ($version -cnotmatch "\A$number\.$number\.$number(-$identifier(\.$identifier)*)?\z") {
-            throw 'Use MAJOR.MINOR.PATCH, optionally followed by a prerelease such as -rc.1. Build metadata is not supported.'
-          }
-          foreach ($component in $version.Split('-', 2)[0].Split('.')) {
-            if ($component.Length -gt 5 -or [int]$component -gt 65534) {
-              throw '.NET assembly version components must be between 0 and 65534.'
-            }
-          }
-          $tag = "v$version"
-          $existingTag = git tag --list $tag
-          if ($LASTEXITCODE -ne 0) { throw 'Could not check existing tags.' }
-          if ($existingTag) { throw "Tag $tag already exists. Choose a new version." }
-          "version=$version" >> $env:GITHUB_OUTPUT
-          "tag=$tag" >> $env:GITHUB_OUTPUT
-          "prerelease=$($version.Contains('-').ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+        uses: auroris/AurorisNet.Build/actions/version@main
+        with:
+          version: ${{ inputs.version }}
+          bump: ${{ inputs.bump }}
+          dry-run: ${{ inputs.dry-run }}
 
+  # The server reads the directory through different libraries on each system, so each archive is tested and built on
+  # its own system. Tests that need a live directory run on a developer's machine.
   build:
-    name: Build and test (${{ matrix.runtime }})
-    needs: prepare
+    name: Test and build (${{ matrix.runtime }})
+    needs: version
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -105,22 +80,23 @@ jobs:
           - os: ubuntu-latest
             runtime: linux-x64
     env:
-      RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+      RELEASE_VERSION: ${{ needs.version.outputs.version }}
       RELEASE_RUNTIME: ${{ matrix.runtime }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: '10.0.x'
 
       - name: Test
+        if: ${{ inputs.test }}
         run: dotnet test IdentityServer.sln --configuration Release --filter 'Category!=LiveDirectory'
 
-      - name: Publish self-contained application
+      - name: Publish the self-contained application
         run: >-
           dotnet publish IdentityServer.csproj
           --configuration Release
@@ -130,172 +106,88 @@ jobs:
           -p:Version="$env:RELEASE_VERSION"
           -p:ContinuousIntegrationBuild=true
 
-      - name: Include deployment documentation and templates
+      - name: Include the documentation and deployment templates
         run: |
           Copy-Item -Path README.md, LICENSE -Destination artifacts/publish
           Copy-Item -Path docs, deploy -Destination artifacts/publish -Recurse
 
-      - name: Package Windows
+      - name: Archive for Windows
         if: runner.os == 'Windows'
         run: |
-          New-Item -ItemType Directory -Path artifacts/packages -Force | Out-Null
-          Compress-Archive -Path artifacts/publish/* -DestinationPath "artifacts/packages/IdentityServer-$env:RELEASE_VERSION-$env:RELEASE_RUNTIME.zip"
+          New-Item -ItemType Directory -Path artifacts/archives -Force | Out-Null
+          Compress-Archive -Path artifacts/publish/* -DestinationPath "artifacts/archives/IdentityServer-$env:RELEASE_VERSION-$env:RELEASE_RUNTIME.zip"
 
-      - name: Package Linux
+      # tar keeps the executable permission, which a zip archive would drop.
+      - name: Archive for Linux
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          mkdir -p artifacts/packages
+          mkdir -p artifacts/archives
           chmod +x artifacts/publish/IdentityServer
-          tar -czf "artifacts/packages/IdentityServer-${RELEASE_VERSION}-${RELEASE_RUNTIME}.tar.gz" -C artifacts/publish .
+          tar -czf "artifacts/archives/IdentityServer-${RELEASE_VERSION}-${RELEASE_RUNTIME}.tar.gz" -C artifacts/publish .
 
-      - name: Upload release package
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      - name: Pass the archive to the release
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: package-${{ matrix.runtime }}
-          path: artifacts/packages/*
+          name: archive-${{ matrix.runtime }}
+          path: artifacts/archives/*
           if-no-files-found: error
           compression-level: 0
+          retention-days: 7
 
-  pack:
-    name: Pack embeddable libraries
-    needs: prepare
+  release:
+    name: Pack and publish
+    needs: [version, build]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      id-token: write
     env:
-      RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+      RELEASE_VERSION: ${{ needs.version.outputs.version }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
 
-      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: '10.0.x'
 
-      - name: Pack Active Directory dependency
-        run: >-
-          dotnet pack ActiveDirectory/ActiveDirectory.csproj
-          --configuration Release --output artifacts/nuget
-          -p:Version="$env:RELEASE_VERSION" -p:ContinuousIntegrationBuild=true
+      # AurorisNet.IdentityServer and AurorisNet.IdentityServer.Directory depend on AurorisNet.ActiveDirectory at this
+      # version, so the three are packed and published together.
+      - name: Pack
+        run: |
+          foreach ($project in 'ActiveDirectory/ActiveDirectory.csproj', 'IdentityServer.Core/IdentityServer.Core.csproj', 'IdentityServer.Directory/IdentityServer.Directory.csproj') {
+            dotnet pack $project --configuration Release --output artifacts/packages "-p:Version=$env:RELEASE_VERSION" -p:ContinuousIntegrationBuild=true
+            if ($LASTEXITCODE -ne 0) { throw "Could not pack $project." }
+          }
 
-      - name: Pack IdentityServer
-        run: >-
-          dotnet pack IdentityServer.Core/IdentityServer.Core.csproj
-          --configuration Release --output artifacts/nuget
-          -p:Version="$env:RELEASE_VERSION" -p:ContinuousIntegrationBuild=true
-
-      - name: Pack people lookup
-        run: >-
-          dotnet pack IdentityServer.Directory/IdentityServer.Directory.csproj
-          --configuration Release --output artifacts/nuget
-          -p:Version="$env:RELEASE_VERSION" -p:ContinuousIntegrationBuild=true
-
-      - name: Upload NuGet packages
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      - name: Fetch the archives
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: nuget-packages
-          path: artifacts/nuget/*
-          if-no-files-found: error
-          compression-level: 0
-
-  release:
-    name: Tag and publish release
-    needs: [prepare, build, pack]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Download release packages
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          pattern: package-*
-          path: artifacts/packages
+          pattern: archive-*
+          path: artifacts/archives
           merge-multiple: true
 
-      - name: Download NuGet packages
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          name: nuget-packages
-          path: artifacts/packages
-
-      - name: Create checksums and release
+      - name: Write the checksums
         shell: bash
-        working-directory: artifacts/packages
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
-          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
-          RELEASE_PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
         run: |
-          windows="IdentityServer-${RELEASE_VERSION}-win-x64.zip"
-          linux="IdentityServer-${RELEASE_VERSION}-linux-x64.tar.gz"
-          files=("$windows" "$linux")
-          for package in AurorisNet.ActiveDirectory AurorisNet.IdentityServer AurorisNet.IdentityServer.Directory; do
-            files+=("${package}.${RELEASE_VERSION}.nupkg" "${package}.${RELEASE_VERSION}.snupkg")
-          done
-          for file in "${files[@]}"; do
-            test -s "$file"
-          done
-          sha256sum "${files[@]}" > SHA256SUMS.txt
-          # Creating the ref fails if another process has claimed this version during the build.
-          gh api --method POST "repos/$GH_REPO/git/refs" \
-            -f "ref=refs/tags/$RELEASE_TAG" -f "sha=$GITHUB_SHA" > /dev/null
-          args=(--verify-tag --title "$RELEASE_TAG" --generate-notes)
-          if [[ "$RELEASE_PRERELEASE" == "true" ]]; then
-            args+=(--prerelease)
-          fi
-          # gh uploads all assets before publishing the release.
-          gh release create "$RELEASE_TAG" "${files[@]}" SHA256SUMS.txt "${args[@]}"
+          cp artifacts/packages/*.nupkg artifacts/packages/*.snupkg artifacts/archives/
+          cd artifacts/archives
+          test -s "IdentityServer-${RELEASE_VERSION}-win-x64.zip"
+          test -s "IdentityServer-${RELEASE_VERSION}-linux-x64.tar.gz"
+          sha256sum IdentityServer-* *.nupkg *.snupkg > SHA256SUMS.txt
+          rm *.nupkg *.snupkg
+          cat SHA256SUMS.txt
 
-  publish-nuget:
-    name: Publish to NuGet.org
-    needs: [prepare, release]
-    if: github.repository == 'auroris/IdentityServer' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    env:
-      RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
-    steps:
-      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6
+      - name: Publish
+        uses: auroris/AurorisNet.Build/actions/publish@main
         with:
-          dotnet-version: '10.0.x'
-
-      - name: Download NuGet packages
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          name: nuget-packages
-          path: artifacts/nuget
-
-      - name: Log in to NuGet.org with OIDC
-        id: nuget-login
-        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1
-        with:
-          user: AurorisNet
-
-      - name: Publish Active Directory dependency and symbols
-        env:
-          NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
-        run: >-
-          dotnet nuget push "artifacts/nuget/AurorisNet.ActiveDirectory.$env:RELEASE_VERSION.nupkg"
-          --api-key "$env:NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
-          --skip-duplicate
-
-      - name: Publish IdentityServer and symbols
-        env:
-          NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
-        run: >-
-          dotnet nuget push "artifacts/nuget/AurorisNet.IdentityServer.$env:RELEASE_VERSION.nupkg"
-          --api-key "$env:NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
-          --skip-duplicate
-
-      - name: Publish people lookup and symbols
-        env:
-          NUGET_API_KEY: ${{ steps.nuget-login.outputs.NUGET_API_KEY }}
-        run: >-
-          dotnet nuget push "artifacts/nuget/AurorisNet.IdentityServer.Directory.$env:RELEASE_VERSION.nupkg"
-          --api-key "$env:NUGET_API_KEY" --source https://api.nuget.org/v3/index.json
-          --skip-duplicate
+          versions: ${{ needs.version.outputs.version }}
+          assets: |
+            artifacts/archives/IdentityServer-*
+            artifacts/archives/SHA256SUMS.txt
+          dry-run: ${{ inputs.dry-run }}
+          notes: ${{ inputs.notes }}

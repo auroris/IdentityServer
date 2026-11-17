@@ -1,8 +1,9 @@
 name: CI
 
+# Tests each pull request on Windows and Linux, and merges a Dependabot update that passes. An update of a package the
+# server or the libraries reference then starts the Release workflow. Tests that need a live directory run on a
+# developer's machine.
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -22,9 +23,11 @@ env:
   DOTNET_NOLOGO: '1'
 
 jobs:
+  # The server reads the directory through different libraries on each system, so the tests run on both.
   test:
     name: Test (${{ matrix.runtime }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -34,71 +37,33 @@ jobs:
           - os: ubuntu-latest
             runtime: linux-x64
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: '10.0.x'
 
       - name: Test
         run: dotnet test IdentityServer.sln --configuration Release --filter 'Category!=LiveDirectory'
 
-  # Dependabot pull requests that pass on both operating systems are merged, and the
-  # Release workflow is started on main so the update ships to GitHub and NuGet.org.
-  # Workflows triggered by Dependabot get a read-only token unless the job asks for more.
+  # A workflow that runs for Dependabot gets a read-only token unless the job asks for more.
   dependabot:
-    name: Merge Dependabot update and release
+    name: Merge Dependabot update
     needs: test
-    if: >-
-      github.event_name == 'pull_request' &&
-      github.event.pull_request.user.login == 'dependabot[bot]' &&
-      github.repository == 'auroris/IdentityServer'
+    if: github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
       pull-requests: write
       actions: write
     steps:
-      - name: Read Dependabot metadata
-        id: metadata
-        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
-
-      - name: Merge and release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
-          ECOSYSTEM: ${{ steps.metadata.outputs.package-ecosystem }}
-          DEPENDENCIES: ${{ steps.metadata.outputs.dependency-names }}
-        run: |
-          # Action majors are exercised by this very run, which used the updated workflow file.
-          if ($env:UPDATE_TYPE -eq 'version-update:semver-major' -and $env:ECOSYSTEM -ne 'github_actions') {
-            $message = 'CI passed, but major version updates are left for manual review. ' +
-              'After merging, start the Release workflow by hand if the change should ship.'
-            gh pr comment $env:PR_NUMBER --body $message
-            if ($LASTEXITCODE -ne 0) { throw 'Could not comment on the pull request.' }
-            return
-          }
-
-          gh pr merge $env:PR_NUMBER --repo $env:GH_REPO --squash --delete-branch
-          if ($LASTEXITCODE -ne 0) { throw 'Could not merge the pull request.' }
-
-          if ($env:ECOSYSTEM -ne 'nuget') {
-            Write-Host "Merged a $env:ECOSYSTEM update; nothing shipped changes, so no release."
-            return
-          }
-          $testOnly = '\A(xunit|Microsoft\.NET\.Test\.Sdk|Microsoft\.AspNetCore\.Mvc\.Testing)'
-          $shipped = @($env:DEPENDENCIES.Split(',') | ForEach-Object Trim | Where-Object { $_ -and $_ -cnotmatch $testOnly })
-          if ($shipped.Count -eq 0) {
-            Write-Host 'Merged test-only dependencies; nothing shipped changes, so no release.'
-            return
-          }
-
-          # A minor dependency update may add surface area that consumers see; a patch does not.
-          $bump = if ($env:UPDATE_TYPE -eq 'version-update:semver-minor') { 'minor' } else { 'patch' }
-          Write-Host "Starting the Release workflow on main with a $bump version bump for: $($shipped -join ', ')"
-          gh workflow run release.yml --ref main -f bump=$bump
-          if ($LASTEXITCODE -ne 0) { throw 'Could not start the Release workflow.' }
+      - uses: auroris/AurorisNet.Build/actions/dependabot-release@main
+        with:
+          shipped-projects: |
+            IdentityServer.csproj
+            ActiveDirectory
+            IdentityServer.Core
+            IdentityServer.Directory

@@ -10,8 +10,8 @@
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageIcon>icon.png</PackageIcon>
-    <PackageProjectUrl>https://github.com/auroris/IdentityServer</PackageProjectUrl>
-    <RepositoryUrl>https://github.com/auroris/IdentityServer</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/auroris/AurorisNet.IdentityServer</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/auroris/AurorisNet.IdentityServer</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <IncludeSymbols>true</IncludeSymbols>
