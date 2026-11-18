@@ -24,7 +24,7 @@
     <PackageReference Include="OpenIddict.Server.AspNetCore" Version="7.9.0" />
     <PackageReference Include="OpenIddict.Validation.AspNetCore" Version="7.9.0" />
     <PackageReference Include="OpenIddict.Validation.ServerIntegration" Version="7.9.0" />
-    <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
+    <PackageReference Include="Serilog.AspNetCore" Version="11.0.0" />
     <PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="11.0.0" />
     <PackageReference Include="System.DirectoryServices.Protocols" Version="11.0.0" />
