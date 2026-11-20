@@ -191,9 +191,9 @@ environment variables.
 
 ## Releases
 
-IdentityServer follows OpenIddict. Dependabot checks NuGet each day and opens one pull request
-for the OpenIddict packages. `ci.yml` tests it on Windows and Linux, merges it and starts
-`release.yml`. Versions are `MAJOR.MINOR.PATCH`: a minor OpenIddict update raises the minor
+IdentityServer follows OpenIddict. Dependabot checks NuGet each week and opens one pull request
+for the OpenIddict packages. `ci.yml` tests it on Windows and Linux and merges it, and
+`weekly-release.yml` publishes the week's merged updates as one release. Versions are `MAJOR.MINOR.PATCH`: a minor OpenIddict update raises the minor
 number and any other update raises the patch number. One release publishes the Windows and
 Linux archives, the three NuGet packages and `SHA256SUMS.txt`, listed in
 [Release assets](docs/releasing.md). The

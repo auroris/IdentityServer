@@ -1,7 +1,7 @@
 name: CI
 
 # Tests each pull request on Windows and Linux, and merges a Dependabot update that passes. An update of a package the
-# server or the libraries reference then starts the Release workflow. Tests that need a live directory run on a
+# server or the libraries reference ships in the next weekly release. Tests that need a live directory run on a
 # developer's machine.
 on:
   pull_request:
@@ -58,7 +58,6 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-      actions: write
     steps:
       - uses: auroris/AurorisNet.Build/actions/dependabot-release@main
         with:

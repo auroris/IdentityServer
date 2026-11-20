@@ -1,15 +1,16 @@
 # Dependabot opens the pull requests that .github/workflows/ci.yml tests and merges. An update of a shipped package then
-# starts the Release workflow, as docs/releasing.md in auroris/AurorisNet.Build describes.
+# goes out in the next weekly release, as docs/releasing.md in auroris/AurorisNet.Build describes.
 version: 2
 updates:
   - package-ecosystem: nuget
     directory: /
     schedule:
-      interval: daily
+      interval: weekly
+      day: monday
     open-pull-requests-limit: 10
     groups:
       # OpenIddict is the primary dependency; its three packages move together and get
-      # their own pull request, so each OpenIddict update becomes its own release.
+      # their own pull request, so an OpenIddict update is tested and merged on its own.
       openiddict:
         patterns:
           - "OpenIddict*"
